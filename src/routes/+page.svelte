@@ -246,8 +246,8 @@
  <label class="sincro"><input type="checkbox" bind:checked={sincronizado}/> Vincular boletos lidos à nota ativa{#if notaAtiva} · <strong>NF {notaAtiva.numero}{#if notaAtiva.favorecido} · {notaAtiva.favorecido}{/if}</strong>{/if}</label>
  {#if camera}
  <div class="cam-hud top" aria-live="polite">
-  <span class="hud-label">Notas{#if estado.notas.length} · {estado.notas.length}{/if}</span>
-  <div class="chips">{#if estado.notas.length}{#each estado.notas as n (n.id)}<span class="chip nf" class:on={destaque===n.id} class:ativa={notaAtivaId===n.id}>NF {n.numero}{#if n.favorecido} · {n.favorecido}{/if} ✓</span>{/each}{:else}<span class="hud-vazio">aponte para a DANFE…</span>{/if}</div>
+  <span class="hud-label">{estado.notas.length} {estado.notas.length===1?'nota':'notas'} · {totalLinhas} {totalLinhas===1?'boleto':'boletos'}</span>
+  <div class="chips">{#each estado.notas as n (n.id)}<span class="chip nf" class:on={destaque===n.id} class:ativa={notaAtivaId===n.id}>NF {n.numero}{#if n.favorecido} · {n.favorecido}{/if} ✓</span>{/each}{#each estado.documentos as d (d.id)}<span class="chip bol" class:on={destaque===d.id}>{NOMES[d.codigo.tipo]}{#if d.codigo.valorCentavos} · {formatarValor(d.codigo.valorCentavos)}{/if} ✓</span>{/each}{#if !estado.notas.length && !totalLinhas}<span class="hud-vazio">aponte para a DANFE e os boletos…</span>{/if}</div>
  </div>
  {/if}
  <div class="cam-wrap" class:on={camera}>
@@ -261,12 +261,6 @@
    </div>
   {/if}
  </div>
- {#if camera}
- <div class="cam-hud bottom" aria-live="polite">
-  <span class="hud-label">Boletos · {totalLinhas}</span>
-  <div class="chips">{#if totalLinhas}{#each estado.documentos as d (d.id)}<span class="chip bol" class:on={destaque===d.id}>{NOMES[d.codigo.tipo]}{#if d.codigo.valorCentavos} · {formatarValor(d.codigo.valorCentavos)}{/if} ✓</span>{/each}{:else}<span class="hud-vazio">passe os boletos…</span>{/if}</div>
- </div>
- {/if}
  {#if camera&&dica}<p class="scan-tip dica" role="status">{dica}</p>{/if}
  <button class="secondary" onclick={camera?stopCamera:scan}>{camera?'Fechar câmera':'Abrir câmera'}</button>
  {#if lido.ok}
