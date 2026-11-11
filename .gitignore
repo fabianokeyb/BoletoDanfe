@@ -1,0 +1,5 @@
+node_modules/
+build/
+.svelte-kit/
+*.bak
+.DS_Store

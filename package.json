@@ -1,0 +1,29 @@
+{
+  "name": "thb-financeiro-web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "vite build",
+    "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
+    "test": "node --test test/*.test.mjs"
+  },
+  "devDependencies": {
+    "@sveltejs/adapter-auto": "8.0.0",
+    "@sveltejs/adapter-static": "4.0.0",
+    "@sveltejs/kit": "3.1.0",
+    "@sveltejs/vite-plugin-svelte": "7.3.1",
+    "@types/qrcode": "1.5.6",
+    "bwip-js": "4.11.4",
+    "pngjs": "7.0.0",
+    "svelte": "5.57.2",
+    "svelte-check": "4.7.7",
+    "typescript": "6.0.3",
+    "vite": "8.3.4"
+  },
+  "dependencies": {
+    "qrcode": "1.5.4",
+    "zxing-wasm": "3.1.5"
+  }
+}
