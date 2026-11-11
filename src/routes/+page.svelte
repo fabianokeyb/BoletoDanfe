@@ -4,6 +4,7 @@
  import {interpretar,interpretarChaveNFe,formatarCnpj,textoParaColar,formatarValor,valorParaColar,type Formato,type CodigoLido,type NotaChave} from '../lib/linha-digitavel';
  import {ESTADO_VAZIO,notaDaChave,notaManual,incluirDocumento,incluirNota,vincular,absorverSoltosSeNotaUnica,atualizarFavorecido,removerDocumento,removerNota,reconciliacao,parcelasDaNota,sugestoes,planilhaTsv,totais,type Estado,type Documento,type Nota} from '../lib/sessao';
  import {nomeDoCnpj,salvarFornecedor,listaFornecedores} from '../lib/fornecedores';
+ import {buscarNomePorCnpj} from '../lib/cnpj-lookup';
  import {copiarTexto} from '../lib/clipboard';
 
  const CHAVE_FORMATO='thb.formato-copia'
@@ -30,6 +31,7 @@
  let cadastro=$state(false)
  let focoFavorecido=$state('')
  let fornecedores=$state<string[]>([])
+ let buscando=$state<string[]>([])
  let carregado=false
  let audio:AudioContext|undefined
  let mChave=$state('');let mNumero=$state('');let mFavorecido=$state('');let mCnpj=$state('');let mSerie=$state('');let mTotal=$state('');
@@ -132,7 +134,7 @@
   const favorecido=nomeDoCnpj(chave.cnpj)
   const {estado:ne,novo,item}=incluirNota(estado,notaDaChave(chave,favorecido))
   estado=sincronizado?absorverSoltosSeNotaUnica(ne):ne;notaAtivaId=item.id;destacar(item.id)
-  if(novo){bipDuplo();pulso('nfe');if(!item.favorecido)focoFavorecido=item.id}
+  if(novo){bipDuplo();pulso('nfe');if(!item.favorecido){focoFavorecido=item.id;if(item.cnpj)void buscarForn(item.id,item.cnpj)}}
  }
 
  function cadastrarNota(){
@@ -155,6 +157,7 @@
   const {estado:ne,item}=incluirNota(estado,nota)
   estado=sincronizado?absorverSoltosSeNotaUnica(ne):ne;notaAtivaId=item.id;destacar(item.id)
   if(cnpj&&favorecido){salvarFornecedor(cnpj,favorecido);fornecedores=listaFornecedores()}
+  else if(cnpj&&!item.favorecido.trim())void buscarForn(item.id,cnpj)
   mChave=mNumero=mFavorecido=mCnpj=mSerie=mTotal='';cadastro=false
  }
 
@@ -162,6 +165,16 @@
   estado=atualizarFavorecido(estado,nota.id,valor)
   if(nota.cnpj){salvarFornecedor(nota.cnpj,valor);fornecedores=listaFornecedores()}
   if(focoFavorecido===nota.id&&valor.trim())focoFavorecido=''
+ }
+ /** Busca o nome do fornecedor online pelo CNPJ e preenche, se o usuário ainda não digitou. */
+ async function buscarForn(notaId:string,cnpj?:string){
+  if(!cnpj||buscando.includes(notaId))return
+  buscando=[...buscando,notaId]
+  try{
+   const nome=await buscarNomePorCnpj(cnpj)
+   const n=estado.notas.find(x=>x.id===notaId)
+   if(nome&&n&&!n.favorecido.trim())editarFavorecido(n,nome)
+  }finally{buscando=buscando.filter(x=>x!==notaId)}
  }
 
  /**
@@ -306,7 +319,7 @@
      <button class="remover" aria-label="Remover nota {nota.numero}" onclick={()=>apagarNota(nota.id)}>×</button>
     </div>
     <input class="forn-input" class:faltando={!nota.favorecido} list="lista-fornecedores" placeholder="Fornecedor (toque para definir)" value={nota.favorecido} onchange={(e)=>editarFavorecido(nota,e.currentTarget.value)}/>
-    {#if nota.cnpj}<p class="cnpj">{formatarCnpj(nota.cnpj)}</p>{/if}
+    {#if buscando.includes(nota.id)}<p class="cnpj buscando">buscando nome pelo CNPJ…</p>{:else if nota.cnpj}<p class="cnpj">{formatarCnpj(nota.cnpj)}</p>{/if}
     <p class="recon recon-{rec.status}">Boletos: {rec.boletos.length} · soma {formatarValor(rec.somaCentavos)}{#if rec.totalCentavos!=null} de {formatarValor(rec.totalCentavos)} — {STATUS_ROTULO[rec.status]}{/if}</p>
     {#if rec.boletos.length}
     <ol class="docs compact">
