@@ -27,9 +27,10 @@ function prepararModulo() {
  * @param cfg.zoomDigital fator (≥1) lido a cada quadro; recorta o centro e amplia
  *        antes de decodificar — é o zoom que funciona onde o `zoom` nativo não é exposto (iOS)
  * @returns `parar` encerra a análise e libera a câmera; `track` é a trilha de vídeo
- *          ativa, usada para flash (torch) e zoom nativo quando o aparelho suporta
+ *          ativa (flash/zoom nativo); `facing` é o `facingMode` reportado —
+ *          'user' (selfie), 'environment' (traseira) ou undefined (webcam não informa)
  */
-export async function iniciarLeitura(video: HTMLVideoElement, aoLer: (texto: string, format: string) => void, cfg: {zoomDigital?: () => number} = {}): Promise<{parar: () => void, track: MediaStreamTrack | undefined}> {
+export async function iniciarLeitura(video: HTMLVideoElement, aoLer: (texto: string, format: string) => void, cfg: {zoomDigital?: () => number} = {}): Promise<{parar: () => void, track: MediaStreamTrack | undefined, facing: string | undefined}> {
   const [stream] = await Promise.all([navigator.mediaDevices.getUserMedia(cameraConstraints()), prepararModulo()])
   let ativo = true
   const parar = () => {
@@ -74,7 +75,9 @@ export async function iniciarLeitura(video: HTMLVideoElement, aoLer: (texto: str
   }
   // Primeira análise só depois do retorno, para o chamador já ter a referência de `parar`.
   setTimeout(analisar, 0)
-  return {parar, track: stream.getVideoTracks()[0]}
+  const track = stream.getVideoTracks()[0]
+  const facing = (track?.getSettings?.() as MediaTrackSettings | undefined)?.facingMode
+  return {parar, track, facing}
 }
 
 /** Capacidades de câmera relevantes, extraídas da trilha de vídeo. */

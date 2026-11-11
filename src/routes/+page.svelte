@@ -41,9 +41,9 @@
  // Controles de câmera (flash/zoom) e feedback visual de leitura.
  let camTrack:MediaStreamTrack|undefined; let camCaps=$state<{torch:boolean,zoom?:{min:number,max:number,step:number}}>({torch:false});
  let torchOn=$state(false); let zoomAtual=$state<number|undefined>(undefined); let zoomDigital=$state(1); let espelhado=$state(false);
- const CHAVE_ESPELHO='thb.espelho'
+ const CHAVE_ESPELHO='thb.espelho'; let prefEspelhoExplicita=false;
  /** Espelha só a prévia (scaleX -1); o canvas de decodificação continua cru, senão o código lê invertido. */
- function alternarEspelho(){espelhado=!espelhado;try{localStorage.setItem(CHAVE_ESPELHO,espelhado?'1':'0')}catch{/* não persiste */}}
+ function alternarEspelho(){espelhado=!espelhado;prefEspelhoExplicita=true;try{localStorage.setItem(CHAVE_ESPELHO,espelhado?'1':'0')}catch{/* não persiste */}}
  let flashPulse=$state(0); let flashTipo=$state<'nfe'|'doc'>('doc');
  /** Monta níveis discretos de zoom a partir da faixa real do aparelho (0.5x só se min<1). */
  function montarZoom(z?:{min:number,max:number,step:number}):{v:number,rotulo:string}[]{
@@ -71,7 +71,7 @@
  onDestroy(stopCamera);
  onMount(()=>{
   try{const salvo=localStorage.getItem(CHAVE_FORMATO);if(FORMATOS.some(f=>f.id===salvo))formato=salvo as Formato}catch{/* mantém padrão */}
-  try{espelhado=localStorage.getItem(CHAVE_ESPELHO)==='1'}catch{/* mantém padrão */}
+  try{const e=localStorage.getItem(CHAVE_ESPELHO);if(e!==null){espelhado=e==='1';prefEspelhoExplicita=true}}catch{/* mantém padrão */}
   const r=restaurar();estado=r.estado;notaAtivaId=r.notaAtivaId;fornecedores=listaFornecedores();carregado=true
  })
  // A sessão dura enquanto a aba estiver aberta (sobrevive a recarregar, não a fechar).
@@ -203,7 +203,7 @@
   aplicarTorchFn=aplicarTorch;aplicarZoomFn=aplicarZoom;
   // ITF e Code128 não têm checksum: exigem DV válido + 2 aparições. QR já tem correção de erro.
   const confirma=criarConfirmador(2);
-  const {parar,track}=await iniciarLeitura(video!,(texto,format)=>{/* callback abaixo */
+  const {parar,track,facing}=await iniciarLeitura(video!,(texto,format)=>{/* callback abaixo */
    if(epoch!==cameraEpoch)return
    const tipo=classificar(texto,format)
    if(!tipo)return
@@ -221,6 +221,8 @@
   if(epoch!==cameraEpoch){parar();}else{
    controls={stop:parar};camTrack=track;camCaps=capacidadesCamera(track);
    zoomAtual=zoomAtualDaTrilha(track)??camCaps.zoom?.min;
+   // Auto-espelho só se o usuário ainda não escolheu: traseira não espelha; selfie e webcam (facing indefinido) sim.
+   if(!prefEspelhoExplicita)espelhado=facing!=='environment';
   }
  }catch{stopCamera();error='Não foi possível abrir a câmera. Verifique a permissão ou cole o código abaixo.';}}
 
