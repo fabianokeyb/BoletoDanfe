@@ -5,7 +5,7 @@ import {defineConfig} from 'vite'
 
 // GitHub Pages de projeto serve em /<repo>/. O base path prefixa todos os
 // assets, o service worker e as rotas. Sobrescrevível via BASE_PATH no CI.
-const base = process.env.BASE_PATH ?? '/BoletoDanfe'
+const base = (process.env.BASE_PATH ?? '/BoletoDanfe') as '' | `/${string}`
 
 export default defineConfig({
   plugins: [sveltekit({adapter: adapter({fallback: 'index.html'}), paths: {base}, preprocess: vitePreprocess()})],

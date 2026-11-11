@@ -24,9 +24,10 @@ function prepararModulo() {
  * Nenhuma imagem sai do aparelho: os quadros são lidos de um canvas local.
  * @param video elemento que exibe a prévia
  * @param aoLer chamado com cada texto decodificado e seu símbolo (pode repetir entre quadros)
- * @returns função que encerra a análise e libera a câmera
+ * @returns `parar` encerra a análise e libera a câmera; `track` é a trilha de vídeo
+ *          ativa, usada para flash (torch) e zoom quando o aparelho suporta
  */
-export async function iniciarLeitura(video: HTMLVideoElement, aoLer: (texto: string, format: string) => void) {
+export async function iniciarLeitura(video: HTMLVideoElement, aoLer: (texto: string, format: string) => void): Promise<{parar: () => void, track: MediaStreamTrack | undefined}> {
   const [stream] = await Promise.all([navigator.mediaDevices.getUserMedia(cameraConstraints()), prepararModulo()])
   let ativo = true
   const parar = () => {
@@ -62,5 +63,56 @@ export async function iniciarLeitura(video: HTMLVideoElement, aoLer: (texto: str
   }
   // Primeira análise só depois do retorno, para o chamador já ter a referência de `parar`.
   setTimeout(analisar, 0)
-  return parar
+  return {parar, track: stream.getVideoTracks()[0]}
+}
+
+/** Capacidades de câmera relevantes, extraídas da trilha de vídeo. */
+export interface CapacidadesCamera {
+  /** Lanterna disponível (Android/Chrome; iOS/Safari não expõe). */
+  torch: boolean
+  /** Faixa de zoom óptico/sensor, quando o aparelho reporta. */
+  zoom?: {min: number, max: number, step: number}
+}
+
+/** Tipagem dos campos não-padronizados (torch/zoom) de MediaTrack*. */
+type CapsExtras = MediaTrackCapabilities & {torch?: boolean, zoom?: {min: number, max: number, step: number}}
+type ConstraintExtra = {advanced: Array<{torch?: boolean, zoom?: number}>}
+
+/**
+ * Lê as capacidades de flash e zoom da trilha. Campos ausentes viram
+ * indisponíveis — o chamador só deve exibir o controle correspondente quando `true`/presente.
+ * @param track trilha de vídeo ativa
+ * @returns capacidades detectadas
+ */
+export function capacidadesCamera(track: MediaStreamTrack | undefined): CapacidadesCamera {
+  const c = (track?.getCapabilities?.() ?? {}) as CapsExtras
+  const z = c.zoom
+  return {
+    torch: c.torch === true,
+    zoom: z && typeof z.max === 'number' && z.max > (z.min ?? 1) ? {min: z.min ?? 1, max: z.max, step: z.step ?? 0.1} : undefined
+  }
+}
+
+/** Zoom atual reportado pela trilha, ou undefined se o aparelho não expõe. */
+export function zoomAtualDaTrilha(track: MediaStreamTrack | undefined): number | undefined {
+  const s = track?.getSettings?.() as (MediaTrackSettings & {zoom?: number}) | undefined
+  return s?.zoom
+}
+
+/**
+ * Liga/desliga a lanterna. Rejeita se o aparelho não suportar torch.
+ * @param track trilha de vídeo ativa
+ * @param ligado estado desejado
+ */
+export function aplicarTorch(track: MediaStreamTrack, ligado: boolean): Promise<void> {
+  return track.applyConstraints({advanced: [{torch: ligado}]} as unknown as ConstraintExtra as MediaTrackConstraints)
+}
+
+/**
+ * Ajusta o zoom óptico/sensor para o valor absoluto informado.
+ * @param track trilha de vídeo ativa
+ * @param valor valor de zoom dentro da faixa reportada por capacidadesCamera
+ */
+export function aplicarZoom(track: MediaStreamTrack, valor: number): Promise<void> {
+  return track.applyConstraints({advanced: [{zoom: valor}]} as unknown as ConstraintExtra as MediaTrackConstraints)
 }
