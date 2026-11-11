@@ -3,7 +3,8 @@ import assert from 'node:assert/strict'
 import {interpretarChaveNFe} from '../src/lib/linha-digitavel.ts'
 import {
   ESTADO_VAZIO, notaDaChave, notaManual, incluirDocumento, incluirNota, vincular,
-  removerNota, reconciliacao, parcelasDaNota, boletosDaNota, sugestoes, planilhaTsv, totais
+  absorverSoltosSeNotaUnica, removerNota, reconciliacao, parcelasDaNota, boletosDaNota,
+  sugestoes, planilhaTsv, totais
 } from '../src/lib/sessao.ts'
 
 const CHAVE = '33261010915021000190550010082722291141103184'
@@ -33,6 +34,37 @@ test('Sincronizado: nota ativa, boletos entram vinculados e numerados por vencim
   assert.deepEqual(parc.get('b1'), {n: 1, total: 2})
   assert.deepEqual(parc.get('b2'), {n: 2, total: 2})
   assert.equal(boletosDaNota(e, nota.id).length, 2)
+})
+
+test('Uma nota só: boletos lidos em qualquer ordem são adotados e numerados por vencimento', () => {
+  // Ordem de leitura caótica: boleto, boleto (antes da nota), nota, boleto.
+  let e = ESTADO_VAZIO
+  e = incluirDocumento(e, boleto('m3', 144130, '2026-11-22'), undefined, 1).estado
+  e = incluirDocumento(e, boleto('m1', 144130, '2026-11-08'), undefined, 2).estado
+  // antes da nota, ficam soltos
+  assert.equal(e.documentos.filter(d => d.notaId).length, 0)
+  const nota = notaDaChave(interpretarChaveNFe(CHAVE).nota, 'PorteFrio', 3)
+  e = incluirNota(e, nota).estado
+  e = absorverSoltosSeNotaUnica(e)                 // nota lida depois adota os soltos
+  e = incluirDocumento(e, boleto('m2', 144130, '2026-11-15'), nota.id, 4).estado
+  e = absorverSoltosSeNotaUnica(e)                 // e o lido depois também entra
+  // todos vinculados à única nota
+  assert.equal(e.documentos.every(d => d.notaId === nota.id), true)
+  // parcela 1 = vencimento mais cedo (08/11), depois 15/11, depois 22/11
+  const parc = parcelasDaNota(e, nota.id)
+  assert.deepEqual(parc.get('m1'), {n: 1, total: 3})
+  assert.deepEqual(parc.get('m2'), {n: 2, total: 3})
+  assert.deepEqual(parc.get('m3'), {n: 3, total: 3})
+})
+
+test('Guarda de ambiguidade: com duas notas, não adota soltos automaticamente', () => {
+  let e = ESTADO_VAZIO
+  e = incluirNota(e, notaManual('1', 'A', {}, 0)).estado
+  e = incluirNota(e, notaManual('2', 'B', {}, 1)).estado
+  e = incluirDocumento(e, boleto('s1', 1000, '2026-11-01'), undefined, 2).estado
+  const depois = absorverSoltosSeNotaUnica(e)
+  assert.equal(depois.documentos[0].notaId, undefined, 'duas notas: escolha é ambígua, fica solto')
+  assert.equal(depois, e, 'estado inalterado')
 })
 
 test('Reconciliação: confere, parcial e excede conforme o total da nota', () => {

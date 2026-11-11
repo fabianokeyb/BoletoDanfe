@@ -2,7 +2,7 @@
  import {onDestroy,onMount,tick} from 'svelte';
  import {api} from '../lib/api';
  import {interpretar,interpretarChaveNFe,formatarCnpj,textoParaColar,formatarValor,valorParaColar,type Formato,type CodigoLido,type NotaChave} from '../lib/linha-digitavel';
- import {ESTADO_VAZIO,notaDaChave,notaManual,incluirDocumento,incluirNota,vincular,atualizarFavorecido,removerDocumento,removerNota,reconciliacao,parcelasDaNota,sugestoes,planilhaTsv,totais,type Estado,type Documento,type Nota} from '../lib/sessao';
+ import {ESTADO_VAZIO,notaDaChave,notaManual,incluirDocumento,incluirNota,vincular,absorverSoltosSeNotaUnica,atualizarFavorecido,removerDocumento,removerNota,reconciliacao,parcelasDaNota,sugestoes,planilhaTsv,totais,type Estado,type Documento,type Nota} from '../lib/sessao';
  import {nomeDoCnpj,salvarFornecedor,listaFornecedores} from '../lib/fornecedores';
  import {copiarTexto} from '../lib/clipboard';
 
@@ -121,7 +121,7 @@
   const {estado:ne,novo,item}=incluirDocumento(estado,codigo,alvo)
   destacar(item.id)
   if(!novo)return
-  estado=ne;raw=codigo.barras;copia='idle';dica='';bip();pulso('doc');void copiar()
+  estado=sincronizado?absorverSoltosSeNotaUnica(ne):ne;raw=codigo.barras;copia='idle';dica='';bip();pulso('doc');void copiar()
  }
 
  /**
@@ -131,7 +131,7 @@
  function registrarNota(chave:NotaChave){
   const favorecido=nomeDoCnpj(chave.cnpj)
   const {estado:ne,novo,item}=incluirNota(estado,notaDaChave(chave,favorecido))
-  estado=ne;notaAtivaId=item.id;destacar(item.id)
+  estado=sincronizado?absorverSoltosSeNotaUnica(ne):ne;notaAtivaId=item.id;destacar(item.id)
   if(novo){bipDuplo();pulso('nfe');if(!item.favorecido)focoFavorecido=item.id}
  }
 
@@ -153,7 +153,7 @@
  }
  function finalizarCadastro(nota:Nota,cnpj:string|undefined,favorecido:string){
   const {estado:ne,item}=incluirNota(estado,nota)
-  estado=ne;notaAtivaId=item.id;destacar(item.id)
+  estado=sincronizado?absorverSoltosSeNotaUnica(ne):ne;notaAtivaId=item.id;destacar(item.id)
   if(cnpj&&favorecido){salvarFornecedor(cnpj,favorecido);fornecedores=listaFornecedores()}
   mChave=mNumero=mFavorecido=mCnpj=mSerie=mTotal='';cadastro=false
  }

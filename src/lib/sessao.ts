@@ -132,6 +132,21 @@ export function vincular(estado: Estado, docId: string, notaId?: string): Estado
 }
 
 /**
+ * Caso de uma nota só: todo boleto pertence a ela. Vincula os documentos soltos à
+ * única nota da sessão, independentemente da ordem de leitura (boleto lido antes da
+ * nota, ou nota lida depois dos boletos). Com zero ou mais de uma nota não faz nada,
+ * pois aí a escolha é ambígua e fica a cargo do cruzamento/confirmação do usuário.
+ * @param estado estado atual (não é alterado)
+ * @returns estado com os soltos adotados pela nota única, ou o próprio estado
+ */
+export function absorverSoltosSeNotaUnica(estado: Estado): Estado {
+  if (estado.notas.length !== 1) return estado
+  const notaId = estado.notas[0].id
+  if (estado.documentos.every(d => d.notaId === notaId)) return estado
+  return {...estado, documentos: estado.documentos.map(d => d.notaId ? d : {...d, notaId})}
+}
+
+/**
  * Troca o nome do fornecedor de uma nota.
  * @param estado estado atual
  * @param notaId id da nota
