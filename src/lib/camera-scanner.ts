@@ -24,10 +24,12 @@ function prepararModulo() {
  * Nenhuma imagem sai do aparelho: os quadros são lidos de um canvas local.
  * @param video elemento que exibe a prévia
  * @param aoLer chamado com cada texto decodificado e seu símbolo (pode repetir entre quadros)
+ * @param cfg.zoomDigital fator (≥1) lido a cada quadro; recorta o centro e amplia
+ *        antes de decodificar — é o zoom que funciona onde o `zoom` nativo não é exposto (iOS)
  * @returns `parar` encerra a análise e libera a câmera; `track` é a trilha de vídeo
- *          ativa, usada para flash (torch) e zoom quando o aparelho suporta
+ *          ativa, usada para flash (torch) e zoom nativo quando o aparelho suporta
  */
-export async function iniciarLeitura(video: HTMLVideoElement, aoLer: (texto: string, format: string) => void): Promise<{parar: () => void, track: MediaStreamTrack | undefined}> {
+export async function iniciarLeitura(video: HTMLVideoElement, aoLer: (texto: string, format: string) => void, cfg: {zoomDigital?: () => number} = {}): Promise<{parar: () => void, track: MediaStreamTrack | undefined}> {
   const [stream] = await Promise.all([navigator.mediaDevices.getUserMedia(cameraConstraints()), prepararModulo()])
   let ativo = true
   const parar = () => {
@@ -49,9 +51,18 @@ export async function iniciarLeitura(video: HTMLVideoElement, aoLer: (texto: str
   const analisar = async () => {
     if (!ativo) return
     if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && video.videoWidth > 0) {
-      canvas.width = video.videoWidth
-      canvas.height = video.videoHeight
-      ctx.drawImage(video, 0, 0)
+      const vw = video.videoWidth, vh = video.videoHeight
+      canvas.width = vw
+      canvas.height = vh
+      // Zoom digital: amostra só o centro (vw/f × vh/f) e amplia para o canvas cheio,
+      // elevando a densidade de pixels do código — o único zoom possível no iOS.
+      const f = Math.max(1, cfg.zoomDigital?.() ?? 1)
+      if (f > 1) {
+        const sw = vw / f, sh = vh / f
+        ctx.drawImage(video, (vw - sw) / 2, (vh - sh) / 2, sw, sh, 0, 0, vw, vh)
+      } else {
+        ctx.drawImage(video, 0, 0)
+      }
       try {
         const resultados = await readBarcodes(ctx.getImageData(0, 0, canvas.width, canvas.height), opcoes)
         for (const r of resultados) if (ativo && r.isValid) aoLer(r.text, r.format)
