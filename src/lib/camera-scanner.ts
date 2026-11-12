@@ -1,4 +1,4 @@
-import {prepareZXingModule, readBarcodes} from 'zxing-wasm/reader'
+import {prepareZXingModule, readBarcodes, type ReaderOptions} from 'zxing-wasm/reader'
 import wasmUrl from 'zxing-wasm/reader/zxing_reader.wasm?url'
 import {cameraConstraints, readerOptions} from './scanner'
 
@@ -26,11 +26,12 @@ function prepararModulo() {
  * @param aoLer chamado com cada texto decodificado e seu símbolo (pode repetir entre quadros)
  * @param cfg.zoomDigital fator (≥1) lido a cada quadro; recorta o centro e amplia
  *        antes de decodificar — é o zoom que funciona onde o `zoom` nativo não é exposto (iOS)
+ * @param cfg.opcoes opções do leitor; padrão = boleto/Pix/DANFE (`readerOptions`). As compras usam EAN.
  * @returns `parar` encerra a análise e libera a câmera; `track` é a trilha de vídeo
  *          ativa (flash/zoom nativo); `facing` é o `facingMode` reportado —
  *          'user' (selfie), 'environment' (traseira) ou undefined (webcam não informa)
  */
-export async function iniciarLeitura(video: HTMLVideoElement, aoLer: (texto: string, format: string) => void, cfg: {zoomDigital?: () => number} = {}): Promise<{parar: () => void, track: MediaStreamTrack | undefined, facing: string | undefined}> {
+export async function iniciarLeitura(video: HTMLVideoElement, aoLer: (texto: string, format: string) => void, cfg: {zoomDigital?: () => number, opcoes?: ReaderOptions} = {}): Promise<{parar: () => void, track: MediaStreamTrack | undefined, facing: string | undefined}> {
   const [stream] = await Promise.all([navigator.mediaDevices.getUserMedia(cameraConstraints()), prepararModulo()])
   let ativo = true
   const parar = () => {
@@ -47,7 +48,7 @@ export async function iniciarLeitura(video: HTMLVideoElement, aoLer: (texto: str
     parar()
     throw new Error('Canvas 2D indisponível')
   }
-  const opcoes = readerOptions()
+  const opcoes = cfg.opcoes ?? readerOptions()
 
   const analisar = async () => {
     if (!ativo) return

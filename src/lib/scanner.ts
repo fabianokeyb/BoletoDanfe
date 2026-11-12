@@ -31,6 +31,13 @@ export function classificar(text: string, format?: string): TipoLeitura | null {
   return null
 }
 
+/**
+ * Opções para produtos na gôndola: EAN-13/EAN-8/UPC (têm dígito verificador próprio).
+ */
+export function readerOptionsProduto(): ReaderOptions {
+  return {formats: ['EANUPC'], tryHarder: true, tryRotate: true, minLineCount: 2, maxNumberOfSymbols: 1}
+}
+
 /** Câmera traseira em alta resolução, sem tornar nenhuma restrição obrigatória. */
 export function cameraConstraints(): MediaStreamConstraints {
   return {audio: false, video: {facingMode: {ideal: 'environment'}, width: {ideal: 1920}, height: {ideal: 1080}}}
