@@ -6,7 +6,8 @@ import {vinculosAutomaticos} from '../src/lib/compras/vinculo.ts'
 import {
   ESTADO_INICIAL, criarLista, criarItem, definirQuantidade, alternarStatus, marcarItem, contar, entradasDaSecao,
   registrarPesquisa, relatorio, relatorioFechamento, removerItem, removerLista, revisar, separarUnidade, embalagemDaUnidade,
-  fecharCompra, faltantesAbertos, incluirFaltantes, descartarFaltante, irPara, listasDaSecao, rotuloItem
+  fecharCompra, faltantesAbertos, incluirFaltantes, descartarFaltante, irPara, listasDaSecao, rotuloItem,
+  qtdDecimal, ajustarQtd, lerQtd, formatarQtd
 } from '../src/lib/compras/estado.ts'
 import {importarPlanilha, TAMANHO_PLANILHA} from '../src/lib/compras/semente.ts'
 import {baixarSnapshot, ErroSincronizacao} from '../src/lib/compras/sincronizar.ts'
@@ -106,20 +107,40 @@ test('Unidade da loja: separa do nome e vira embalagem quando é numérica', () 
   assert.equal(rotuloItem({nome: 'Sal', unidade: 'fd'}), 'Sal (fd)')
 })
 
-test('Planilha: duas seções, lojas certas, quantidades só como sugestão', () => {
+test('Planilha: só itens, unidades e grupos; nenhuma quantidade copiada', () => {
   const e = importarPlanilha(ESTADO_INICIAL)
-  assert.deepEqual(listasDaSecao(e, 'producao').map(l => l.nome), ['Tijuca', 'Freguesia'])
-  assert.deepEqual(listasDaSecao(e, 'bebidas').map(l => l.nome), ['Freguesia'])
+  assert.deepEqual(listasDaSecao(e, 'producao').map(l => [l.nome, l.sigla]), [['Tijuca', 'THBT'], ['Freguesia', 'THBF']])
+  assert.deepEqual(listasDaSecao(e, 'bebidas').map(l => l.sigla), ['THBT', 'THBF'])
   assert.equal(e.itens.filter(i => i.secao === 'producao').length, TAMANHO_PLANILHA.producao)
   assert.equal(e.itens.filter(i => i.secao === 'bebidas').length, TAMANHO_PLANILHA.bebidas)
-  assert.equal(e.entradas.length, 0, 'nada pré-selecionado')
-  const oleo = e.itens.find(i => i.nome === 'Óleo Garrafa')
-  assert.equal(oleo.unidade, '900 ml')
-  assert.deepEqual(Object.values(oleo.ultimaQtd), ['40', '40'])
-  const coca = e.itens.find(i => i.nome === 'Coca')
-  assert.equal(coca.unidade, '1,5 L')
+  assert.equal(e.entradas.length, 0)
+  assert.ok(e.itens.every(i => Object.keys(i.ultimaQtd).length === 0), 'sem sugestão vinda da planilha')
+  assert.equal(e.itens.find(i => i.nome === 'Óleo Garrafa').unidade, '900 ml')
+  assert.equal(e.itens.find(i => i.nome === 'Coca').unidade, '1,5 L')
   assert.equal(e.itens.find(i => i.nome === 'Heineken' && i.unidade === '600 ml').origem, 'Byll')
   assert.equal(importarPlanilha(e).itens.length, e.itens.length, 'reimportar não duplica')
+})
+
+test('Quantidade: kg e L com 3 casas, demais inteiros; zero tira da lista', () => {
+  assert.equal(qtdDecimal({unidade: 'kg'}), true)
+  assert.equal(qtdDecimal({unidade: 'L'}), true)
+  assert.equal(qtdDecimal({unidade: '2,8 kg'}), false, 'balde de 2,8 kg conta baldes')
+  assert.equal(qtdDecimal({unidade: '900 ml'}), false)
+  assert.equal(ajustarQtd({unidade: 'kg'}, 1.23456), 1.235)
+  assert.equal(ajustarQtd({unidade: 'un'}, 2.6), 3)
+  assert.equal(ajustarQtd({unidade: 'fd'}, -1), 0)
+  assert.equal(lerQtd('1,5'), 1.5)
+  assert.equal(lerQtd('1 (veja)'), 0)
+  assert.equal(formatarQtd(1.5), '1,5')
+  let e = importarPlanilha(ESTADO_INICIAL)
+  const [tij] = listasDaSecao(e, 'producao')
+  const cebola = e.itens.find(i => i.nome === 'Cebola Branca').id
+  const oleo = e.itens.find(i => i.nome === 'Óleo Garrafa').id
+  e = definirQuantidade(e, tij.id, cebola, 2.5)
+  e = definirQuantidade(e, tij.id, oleo, 2.5)
+  assert.deepEqual(e.entradas.map(x => x.quantidade), [2.5, 3])
+  e = definirQuantidade(e, tij.id, oleo, 0)
+  assert.equal(e.entradas.length, 1)
 })
 
 test('Ciclo completo: montar, comprar, fechar levando faltantes para a próxima lista', () => {
@@ -127,10 +148,10 @@ test('Ciclo completo: montar, comprar, fechar levando faltantes para a próxima 
   const [tij, fre] = listasDaSecao(e, 'producao')
   const id = n => e.itens.find(i => i.nome === n && i.secao === 'producao').id
   const rucula = id('Rúcula'), oleo = id('Óleo Garrafa'), sal = id('Sal')
-  e = definirQuantidade(e, tij.id, rucula, '3')
-  e = definirQuantidade(e, fre.id, rucula, '3')
-  e = definirQuantidade(e, fre.id, oleo, '40')
-  e = definirQuantidade(e, fre.id, sal, '1')
+  e = definirQuantidade(e, tij.id, rucula, 3)
+  e = definirQuantidade(e, fre.id, rucula, 3)
+  e = definirQuantidade(e, fre.id, oleo, 40)
+  e = definirQuantidade(e, fre.id, sal, 1)
   e = irPara(e, 'producao', 'comprar', '12/11/2026')
   assert.equal(e.ciclos.producao.nome, '12/11/2026')
   e = alternarStatus(e, fre.id, oleo, 'comprado')
@@ -147,10 +168,9 @@ test('Ciclo completo: montar, comprar, fechar levando faltantes para a próxima 
   assert.equal(entradasDaSecao(e, 'producao').length, 0)
   assert.equal(e.ciclos.producao.etapa, 'montar')
   assert.equal(e.historico[0].itens.length, 4)
-  assert.equal(e.itens.find(i => i.id === oleo).ultimaQtd[fre.id], '40')
+  assert.equal(e.itens.find(i => i.id === oleo).ultimaQtd[fre.id], 40, 'última quantidade vem da compra real')
   const abertos = faltantesAbertos(e, 'producao')
-  assert.deepEqual(abertos.map(f => [f.quantidade, f.desde]), [['3', '12/11/2026'], ['3', '12/11/2026']])
-  // próxima lista: inclui um faltante, descarta o outro
+  assert.deepEqual(abertos.map(f => [f.quantidade, f.desde]), [[3, '12/11/2026'], [3, '12/11/2026']])
   e = incluirFaltantes(e, [abertos[0]])
   assert.equal(e.entradas[0].herdada, '12/11/2026')
   e = descartarFaltante(e, abertos[1])
@@ -160,45 +180,54 @@ test('Ciclo completo: montar, comprar, fechar levando faltantes para a próxima 
   assert.equal(e.faltantes.length, 0, 'comprado sai da lista de faltantes')
 })
 
-test('Seções independentes: fechar produção não mexe em bebidas', () => {
+test('Seções independentes, as duas com THBT e THBF', () => {
   let e = importarPlanilha(ESTADO_INICIAL)
-  const fre = listasDaSecao(e, 'bebidas')[0]
+  const [tij, fre] = listasDaSecao(e, 'bebidas')
   const coca = e.itens.find(i => i.nome === 'Coca-Cola').id
   const alho = e.itens.find(i => i.nome === 'Alho').id
-  e = definirQuantidade(e, fre.id, coca, '2 fd')
-  e = definirQuantidade(e, fre.id, alho, '4')
+  e = definirQuantidade(e, fre.id, coca, 2)
+  e = definirQuantidade(e, tij.id, coca, 1)
+  e = definirQuantidade(e, fre.id, alho, 4)
   e = irPara(e, 'bebidas', 'comprar', 'x')
   e = fecharCompra(e, 'producao', [])
-  assert.equal(entradasDaSecao(e, 'bebidas').length, 1)
+  assert.equal(entradasDaSecao(e, 'bebidas').length, 2)
   assert.equal(e.ciclos.bebidas.etapa, 'comprar')
   const r = relatorio(e, 'bebidas', 'tudo')
   assert.match(r, /🥤 \*THB · COMPRAS BEBIDAS E SALÃO\* · x/)
-  assert.match(r, /⬜ 2 fd · Coca-Cola \(310 ml\)/)
+  assert.match(r, /⬜ 2 · Coca-Cola \(310 ml\)/)
 })
 
-test('Migração da versão 1: unidade sai do nome, listas ganham seções, compra em andamento continua', () => {
+test('Migração: v1 e v2 viram v3 com quantidades numéricas, siglas THBT/THBF e sem sugestões da planilha', () => {
   const v1 = {versao: 1, listas: [{id: 'a', nome: 'Tijuca', sigla: 'T', ordem: 0}], itens: [{id: 'i', nome: 'Maionese (2,8 kg)', grupo: 'Insumos / Mercado', vinculos: []}],
     entradas: [{listaId: 'a', itemId: 'i', quantidade: '6', status: 'comprado'}, {listaId: 'b', itemId: 'i'}], pesquisa: {}, rodadaNome: '26/01/2026'}
   const e = revisar(v1)
-  assert.equal(e.versao, 2)
+  assert.equal(e.versao, 3)
   assert.deepEqual([e.itens[0].nome, e.itens[0].unidade, e.itens[0].grupo, e.itens[0].secao], ['Maionese', '2,8 kg', 'Insumos', 'producao'])
-  assert.deepEqual(e.listas[0].secoes, ['producao', 'bebidas'])
-  assert.equal(e.entradas.length, 1)
+  assert.deepEqual([e.listas[0].sigla, e.listas[0].secoes], ['THBT', ['producao', 'bebidas']])
+  assert.deepEqual(e.entradas.map(x => x.quantidade), [6])
   assert.deepEqual(e.ciclos.producao, {etapa: 'comprar', nome: '26/01/2026', desde: 0})
+  const v2 = {versao: 2, listas: [{id: 'f', nome: 'Freguesia', sigla: 'F', secoes: ['producao']}],
+    itens: [{id: 'd', nome: 'Desinfetante', unidade: '5L', secao: 'producao', grupo: 'Limpeza', vinculos: [], ultimaQtd: {f: '1 (veja)'}}],
+    entradas: [{listaId: 'f', itemId: 'd', quantidade: '1 (veja)', status: 'pendente'}], ciclos: {}}
+  const e2 = revisar(v2)
+  assert.deepEqual(e2.itens[0].ultimaQtd, {})
+  assert.deepEqual(e2.entradas.map(x => x.quantidade), [1], 'texto livre vira 1')
+  assert.deepEqual([e2.listas[0].sigla, e2.listas[0].secoes], ['THBF', ['producao', 'bebidas']])
+  assert.equal(revisar(e2).listas[0].sigla, 'THBF', 'v3 não é migrada de novo')
   assert.deepEqual(revisar(null).listas, [])
 })
 
 test('Remover lista e item limpa entradas e faltantes', () => {
   let {estado: e, lista} = criarLista(ESTADO_INICIAL, 'Casa', 'pessoal', ['producao'])
   const r = criarItem(e, {nome: 'Sabão', secao: 'producao', grupo: 'Limpeza', unidade: 'un'}); e = r.estado
-  e = definirQuantidade(e, lista.id, r.item.id, '2')
+  e = definirQuantidade(e, lista.id, r.item.id, 2)
   e = fecharCompra(e, 'producao', [{itemId: r.item.id, listaId: lista.id}])
   assert.equal(e.faltantes.length, 1)
   assert.equal(removerItem(e, r.item.id).faltantes.length, 0)
   assert.equal(removerLista(e, lista.id).faltantes.length, 0)
   e = registrarPesquisa(e, r.item.id, {preco: 3, qtd: 1, unidade: 'un', em: 1})
   assert.equal(Object.keys(removerItem(e, r.item.id).pesquisa).length, 0)
-  assert.equal(marcarItem(definirQuantidade(e, lista.id, r.item.id, '1'), r.item.id, 'comprado').entradas[0].status, 'comprado')
+  assert.equal(marcarItem(definirQuantidade(e, lista.id, r.item.id, 1), r.item.id, 'comprado').entradas[0].status, 'comprado')
 })
 
 test('Vínculo automático só quando inequívoco e com compra; respeita recusa', () => {

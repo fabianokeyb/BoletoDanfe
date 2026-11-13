@@ -48,8 +48,8 @@ export interface Item {
   vinculos: Vinculo[]
   /** Vínculo criado automaticamente na sincronização, aguardando confirmação. */
   vinculoAuto?: boolean
-  /** Última quantidade comprada por lista: sugestão na hora de montar. */
-  ultimaQtd: Record<string, string>
+  /** Última quantidade comprada por lista (de compras encerradas): ponto de partida do +. */
+  ultimaQtd: Record<string, number>
   criadoEm: number
 }
 
@@ -59,7 +59,7 @@ export type Status = 'pendente' | 'comprado' | 'indisponivel'
 export interface Entrada {
   listaId: string
   itemId: string
-  quantidade: string
+  quantidade: number
   status: Status
   atualizadoEm: number
   /** Veio da lista de faltantes de uma compra anterior (rótulo dela). */
@@ -70,7 +70,7 @@ export interface Entrada {
 export interface Faltante {
   itemId: string
   listaId: string
-  quantidade: string
+  quantidade: number
   desde: string
 }
 
@@ -96,11 +96,11 @@ export interface CompraFechada {
   secao: Secao
   nome: string
   fechadaEm: number
-  itens: {itemId: string, nome: string, unidade: string, listaId: string, quantidade: string, status: Status}[]
+  itens: {itemId: string, nome: string, unidade: string, listaId: string, quantidade: number, status: Status}[]
 }
 
 export interface EstadoCompras {
-  versao: 2
+  versao: 3
   listas: Lista[]
   itens: Item[]
   entradas: Entrada[]
@@ -112,7 +112,7 @@ export interface EstadoCompras {
 
 const CICLO_NOVO: Ciclo = {etapa: 'montar', nome: '', desde: 0}
 export const ESTADO_INICIAL: EstadoCompras = {
-  versao: 2, listas: [], itens: [], entradas: [], faltantes: [], pesquisa: {},
+  versao: 3, listas: [], itens: [], entradas: [], faltantes: [], pesquisa: {},
   ciclos: {producao: {...CICLO_NOVO}, bebidas: {...CICLO_NOVO}}, historico: []
 }
 const MAX_HISTORICO = 40
@@ -171,6 +171,43 @@ export function ordemGrupo(secao: Secao, g: string): number {
 /** Nome do item com a unidade, como vai no relatório e na tela: "Óleo Garrafa (900 ml)". */
 export function rotuloItem(i: Pick<Item, 'nome' | 'unidade'>): string {
   return i.unidade ? `${i.nome} (${i.unidade})` : i.nome
+}
+
+/**
+ * Item vendido a granel por peso ou volume (unidade "kg" ou "L" sem tamanho de embalagem):
+ * quantidade com até 3 casas decimais. Os demais (un, fd, cx, 900 ml, 2,8 kg…) contam embalagens: inteiro.
+ * @param i item
+ */
+export function qtdDecimal(i: Pick<Item, 'unidade'>): boolean {
+  const u = normalizar(i.unidade).replace(/\s/g, '')
+  return u === 'kg' || u === 'l'
+}
+
+/**
+ * Ajusta uma quantidade à regra do item: 3 casas para kg/L, inteiro para o resto; nunca negativa.
+ * @param i item
+ * @param n quantidade
+ */
+export function ajustarQtd(i: Pick<Item, 'unidade'>, n: number): number {
+  if (!Number.isFinite(n) || n <= 0) return 0
+  return qtdDecimal(i) ? Math.round(n * 1000) / 1000 : Math.round(n)
+}
+
+/**
+ * Lê o que foi digitado ("1,5", "1.5", "40") como número; vazio ou inválido = 0.
+ * @param texto texto do campo
+ */
+export function lerQtd(texto: string): number {
+  const t = texto.trim().replace(',', '.')
+  return /^\d*\.?\d*$/.test(t) && t !== '' && t !== '.' ? Number(t) : 0
+}
+
+/**
+ * Quantidade no padrão brasileiro: 1,5 · 0,125 · 40.
+ * @param n quantidade
+ */
+export function formatarQtd(n: number): string {
+  return n.toLocaleString('pt-BR', {maximumFractionDigits: 3})
 }
 
 /**
@@ -263,14 +300,16 @@ export function removerItem(e: EstadoCompras, id: string): EstadoCompras {
 // ------------------------------------------------------------------ montar
 
 /**
- * Põe, altera ou tira (quantidade vazia) um item da lista atual de uma loja.
+ * Põe, altera ou tira (quantidade 0) um item da lista atual de uma loja.
+ * A quantidade é ajustada à regra do item (kg/L com 3 casas, demais inteiros).
  * @param e estado
  * @param listaId loja
  * @param itemId item
- * @param quantidade texto livre: "3", "1,5", "4 (M) / 1 (G)"
+ * @param quantidade quantidade numérica
  */
-export function definirQuantidade(e: EstadoCompras, listaId: string, itemId: string, quantidade: string, agora = Date.now(), herdada?: string): EstadoCompras {
-  const q = quantidade.trim()
+export function definirQuantidade(e: EstadoCompras, listaId: string, itemId: string, quantidade: number, agora = Date.now(), herdada?: string): EstadoCompras {
+  const item = e.itens.find(i => i.id === itemId)
+  const q = item ? ajustarQtd(item, quantidade) : 0
   const existe = e.entradas.find(x => x.listaId === listaId && x.itemId === itemId)
   if (!q) return existe ? {...e, entradas: e.entradas.filter(x => x !== existe)} : e
   if (existe) return {...e, entradas: e.entradas.map(x => x === existe ? {...x, quantidade: q, atualizadoEm: agora} : x)}
@@ -396,7 +435,7 @@ export function fecharCompra(e: EstadoCompras, secao: Secao, levar: {itemId: str
     ...e.faltantes.filter(f => !tocados.has(`${f.itemId}|${f.listaId}`)),
     ...daSecao.filter(leva).map(x => ({itemId: x.itemId, listaId: x.listaId, quantidade: x.quantidade, desde: x.herdada ?? nome}))
   ]
-  const ultima = new Map<string, Record<string, string>>()
+  const ultima = new Map<string, Record<string, number>>()
   for (const x of daSecao) ultima.set(x.itemId, {...(ultima.get(x.itemId) ?? itens.get(x.itemId)!.ultimaQtd), [x.listaId]: x.quantidade})
   const pesquisa = Object.fromEntries(Object.entries(e.pesquisa).filter(([id]) => itens.get(id)?.secao !== secao))
   return {
@@ -448,7 +487,7 @@ export function relatorio(e: EstadoCompras, secao: Secao, modo: ModoRelatorio, a
   const entradas = entradasDaSecao(e, secao).filter(x => passa(x.status))
   const c = contar(entradasDaSecao(e, secao))
   const linhas = [titulo(e, secao, agora), `✅ ${c.comprado} · ❌ ${c.indisponivel} · ⬜ ${c.pendente}`]
-  linhas.push(...blocosPorLista(e, secao, entradas, (x, i) => `${ICONE[x.status]} ${x.quantidade} · ${rotuloItem(i)}`))
+  linhas.push(...blocosPorLista(e, secao, entradas, (x, i) => `${ICONE[x.status]} ${formatarQtd(x.quantidade)} · ${rotuloItem(i)}`))
   if (!entradas.length) linhas.push('', '_Nada nesta seleção._')
   return linhas.join('\n')
 }
@@ -467,41 +506,59 @@ export function relatorioFechamento(e: EstadoCompras, secao: Secao, levar: {item
     `✅ ${c.comprado} comprados · ❌ ${c.indisponivel} em falta · ⬜ ${c.pendente} sem marcar`]
   if (vai.length) {
     linhas.push('', '🔁 *FICA PARA A PRÓXIMA LISTA*')
-    linhas.push(...blocosPorLista(e, secao, vai, (x, i) => `${x.status === 'indisponivel' ? '❌' : '⬜'} ${x.quantidade} · ${rotuloItem(i)}`))
+    linhas.push(...blocosPorLista(e, secao, vai, (x, i) => `${x.status === 'indisponivel' ? '❌' : '⬜'} ${formatarQtd(x.quantidade)} · ${rotuloItem(i)}`))
   } else linhas.push('', '🎉 Nada ficou faltando.')
   return linhas.join('\n')
 }
 
 // ------------------------------------------------------------------ leitura
 
+/** Siglas das lojas da rede (a sigla curta T/F das versões anteriores vira o código da loja). */
+const SIGLAS_LOJA: Record<string, string> = {tijuca: 'THBT', freguesia: 'THBF'}
+
+/** Número de uma quantidade antiga em texto: só aceita número puro ("3", "1,5"); o resto vira 0. */
+function qtdAntiga(x: unknown): number {
+  if (typeof x === 'number') return Number.isFinite(x) && x > 0 ? x : 0
+  return typeof x === 'string' ? lerQtd(x) : 0
+}
+
 /**
- * Valida o estado lido do armazenamento e migra a versão 1 (listas sem seção, nome com unidade).
- * @param bruto objeto lido (não confiável)
+ * Valida o estado lido do armazenamento (não confiável) e migra versões anteriores:
+ * v1 (nome com unidade, sem seções), v2 (quantidade em texto livre e sugestões copiadas da planilha).
+ * @param bruto objeto lido
  */
 export function revisar(bruto: unknown): EstadoCompras {
   const b = (bruto && typeof bruto === 'object' ? bruto : {}) as Record<string, unknown>
-  const v1 = b.versao !== 2
+  const versao = Number(b.versao) || 1
   const arr = <T>(x: unknown): T[] => Array.isArray(x) ? x.filter(y => y && typeof y === 'object') as T[] : []
-  const listas = arr<Lista>(b.listas).filter(l => typeof l.id === 'string')
-    .map(l => ({...l, secoes: Array.isArray(l.secoes) && l.secoes.length ? l.secoes : ['producao', 'bebidas'] as Secao[]}))
+  const listas = arr<Lista>(b.listas).filter(l => typeof l.id === 'string').map(l => {
+    const loja = SIGLAS_LOJA[normalizar(String(l.nome ?? ''))]
+    const secoes: Secao[] = loja && versao < 3 ? ['producao', 'bebidas']
+      : Array.isArray(l.secoes) && l.secoes.length ? l.secoes : ['producao', 'bebidas']
+    return {...l, secoes, sigla: loja && versao < 3 && String(l.sigla).length <= 1 ? loja : String(l.sigla ?? '').slice(0, 4) || 'L'}
+  })
   const itens = arr<Item & {grupo?: string}>(b.itens).filter(i => typeof i.id === 'string').map(i => {
-    const sep = v1 && !i.unidade ? separarUnidade(String(i.nome ?? '')) : {nome: String(i.nome ?? ''), unidade: String(i.unidade ?? '')}
+    const sep = versao < 2 && !i.unidade ? separarUnidade(String(i.nome ?? '')) : {nome: String(i.nome ?? ''), unidade: String(i.unidade ?? '')}
     const secao: Secao = i.secao === 'bebidas' ? 'bebidas' : 'producao'
     const grupo = i.grupo === 'Insumos / Mercado' ? 'Insumos' : i.grupo === 'Bebidas' ? 'Refrigerantes' : (i.grupo || 'Outros')
+    // até a v2 a "última quantidade" era copiada da planilha, não de compra real: descarta
+    const ultimaQtd = versao < 3 ? {} : Object.fromEntries(Object.entries(i.ultimaQtd && typeof i.ultimaQtd === 'object' ? i.ultimaQtd : {})
+      .map(([k, v]) => [k, qtdAntiga(v)]).filter(([, v]) => (v as number) > 0))
     return {...i, nome: sep.nome, unidade: sep.unidade, secao, grupo, origem: i.origem || 'Mercado',
-      vinculos: Array.isArray(i.vinculos) ? i.vinculos : [], ultimaQtd: i.ultimaQtd && typeof i.ultimaQtd === 'object' ? i.ultimaQtd : {}}
+      vinculos: Array.isArray(i.vinculos) ? i.vinculos : [], ultimaQtd} as Item
   })
-  const ids = new Set(itens.map(i => i.id)), lids = new Set(listas.map(l => l.id))
-  const entradas = arr<Entrada>(b.entradas).filter(x => ids.has(x.itemId) && lids.has(x.listaId))
-  const faltantes = arr<Faltante>(b.faltantes).filter(x => ids.has(x.itemId) && lids.has(x.listaId))
+  const porId = new Map(itens.map(i => [i.id, i])), lids = new Set(listas.map(l => l.id))
+  const qtd = (itemId: string, q: unknown) => {const i = porId.get(itemId); return i ? ajustarQtd(i, qtdAntiga(q) || 1) : 0}
+  const entradas = arr<Entrada>(b.entradas).filter(x => porId.has(x.itemId) && lids.has(x.listaId)).map(x => ({...x, quantidade: qtd(x.itemId, x.quantidade)}))
+  const faltantes = arr<Faltante>(b.faltantes).filter(x => porId.has(x.itemId) && lids.has(x.listaId)).map(x => ({...x, quantidade: qtd(x.itemId, x.quantidade)}))
   const c = (b.ciclos ?? {}) as Partial<Record<Secao, Ciclo>>
   const ciclo = (x?: Ciclo): Ciclo => x && ['montar', 'comprar', 'fechar'].includes(x.etapa) ? x : {...CICLO_NOVO}
   // v1 tinha uma rodada única; se havia lista em andamento, ela segue na etapa de compra.
-  const producao = v1 && entradas.length ? {etapa: 'comprar' as const, nome: String(b.rodadaNome ?? ''), desde: Number(b.rodadaDesde) || 0} : ciclo(c.producao)
+  const producao = versao < 2 && entradas.length ? {etapa: 'comprar' as const, nome: String(b.rodadaNome ?? ''), desde: Number(b.rodadaDesde) || 0} : ciclo(c.producao)
   return {
-    versao: 2, listas, itens, entradas, faltantes,
+    versao: 3, listas, itens, entradas, faltantes,
     pesquisa: b.pesquisa && typeof b.pesquisa === 'object' ? b.pesquisa as Record<string, Pesquisa> : {},
     ciclos: {producao, bebidas: ciclo(c.bebidas)},
-    historico: arr<CompraFechada>(b.historico).slice(0, MAX_HISTORICO)
+    historico: arr<CompraFechada>(b.historico).slice(0, MAX_HISTORICO).map(h => ({...h, itens: arr<CompraFechada['itens'][number]>(h.itens).map(x => ({...x, quantidade: qtdAntiga(x.quantidade)}))}))
   }
 }
