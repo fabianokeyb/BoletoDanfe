@@ -62,11 +62,13 @@ const PRODUCAO: Record<string, LinhaProducao[]> = {
   ]
 }
 
-/** Aba Bebidas da planilha: quantidade única e origem de compra. */
+/**
+ * Aba Bebidas da planilha. O salão não repete o que já está na produção
+ * (bobina, grampo, copinho de café, desinfetante): esses itens são comprados uma vez só.
+ */
 const BEBIDAS: Record<string, LinhaBebidas[]> = {
   'Salão': [
-    ['Bobina 80X40 (cx)', 'Kalunga'], ['Grampo 26/6 (cx)', 'Kalunga'], ['Álcool 70 (1L)', 'Mercado', i(4591831)], ['Bobina Stone', 'Stone'],
-    ['Canudo (c/ 1000)', 'SuperPreço'], ['Copinho de café 50ml (fd)', 'Mercado', p('06057223:1071154')], ['Desinfetante (5L)', 'Mercado'],
+    ['Álcool 70 (1L)', 'Mercado', i(4591831)], ['Bobina Stone', 'Stone'], ['Canudo (c/ 1000)', 'SuperPreço'],
     ['Guardanapo (fd)', 'Mercado'], ['Ketchup Sachet (cx)', 'Mercado', i(4568062)], ['Maionese Sachet (cx)', 'Mercado'],
     ['Mostarda Sachet (cx)', 'Mercado'], ['Pano de Mesa (fd)', 'Mercado'], ['Papel Higiênico (30m)', 'Mercado'],
     ['Papel Toalha Lavabo', 'Mercado'], ['Pedra Sanitária / Bom Ar', 'Mercado'], ['Sabonete Líquido (5L)', 'Mercado'],

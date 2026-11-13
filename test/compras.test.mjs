@@ -4,7 +4,7 @@ import {indexar, resumir, compararGondola, produtoPorGtin} from '../src/lib/comp
 import {buscarCandidatos} from '../src/lib/compras/vinculo.ts'
 import {vinculosAutomaticos} from '../src/lib/compras/vinculo.ts'
 import {
-  ESTADO_INICIAL, criarLista, criarItem, definirQuantidade, alternarStatus, marcarItem, contar, entradasDaSecao,
+  ESTADO_INICIAL, normalizar, criarLista, criarItem, definirQuantidade, alternarStatus, marcarItem, contar, entradasDaSecao,
   registrarPesquisa, relatorio, relatorioFechamento, removerItem, removerLista, revisar, separarUnidade, embalagemDaUnidade,
   fecharCompra, faltantesAbertos, incluirFaltantes, descartarFaltante, irPara, listasDaSecao, rotuloItem,
   qtdDecimal, ajustarQtd, lerQtd, formatarQtd
@@ -201,7 +201,7 @@ test('Migração: v1 e v2 viram v3 com quantidades numéricas, siglas THBT/THBF 
   const v1 = {versao: 1, listas: [{id: 'a', nome: 'Tijuca', sigla: 'T', ordem: 0}], itens: [{id: 'i', nome: 'Maionese (2,8 kg)', grupo: 'Insumos / Mercado', vinculos: []}],
     entradas: [{listaId: 'a', itemId: 'i', quantidade: '6', status: 'comprado'}, {listaId: 'b', itemId: 'i'}], pesquisa: {}, rodadaNome: '26/01/2026'}
   const e = revisar(v1)
-  assert.equal(e.versao, 3)
+  assert.equal(e.versao, 4)
   assert.deepEqual([e.itens[0].nome, e.itens[0].unidade, e.itens[0].grupo, e.itens[0].secao], ['Maionese', '2,8 kg', 'Insumos', 'producao'])
   assert.deepEqual([e.listas[0].sigla, e.listas[0].secoes], ['THBT', ['producao', 'bebidas']])
   assert.deepEqual(e.entradas.map(x => x.quantidade), [6])
@@ -254,4 +254,21 @@ test('Sincronizar: token recusado e resposta válida', async () => {
   const s = await baixarSnapshot(' tok ', ok)
   assert.equal(corpo.p_token, 'tok')
   assert.equal(s.obs.length, 6)
+})
+
+test('Migração v4: salão sem itens repetidos da produção; o que estava na lista vai para o item da produção', () => {
+  const v3 = {versao: 3, listas: [{id: 'f', nome: 'Freguesia', sigla: 'THBF', secoes: ['producao', 'bebidas']}],
+    itens: [
+      {id: 'p', nome: 'Desinfetante', unidade: '5L', secao: 'producao', grupo: 'Limpeza', vinculos: [], ultimaQtd: {}},
+      {id: 's', nome: 'Desinfetante', unidade: '5 L', secao: 'bebidas', grupo: 'Salão', vinculos: [], ultimaQtd: {}},
+      {id: 'g', nome: 'Guardanapo', unidade: 'fd', secao: 'bebidas', grupo: 'Salão', vinculos: [], ultimaQtd: {}}
+    ],
+    entradas: [{listaId: 'f', itemId: 's', quantidade: 2, status: 'pendente'}], faltantes: [], ciclos: {}}
+  const e = revisar(v3)
+  assert.deepEqual(e.itens.map(i => i.id), ['p', 'g'])
+  assert.deepEqual(e.entradas.map(x => [x.itemId, x.quantidade]), [['p', 2]])
+  const m = importarPlanilha(ESTADO_INICIAL)
+  const nomes = s => new Set(m.itens.filter(i => i.secao === s).map(i => normalizar(i.nome + '|' + i.unidade)))
+  const prod = nomes('producao')
+  assert.deepEqual([...nomes('bebidas')].filter(n => prod.has(n)), [])
 })

@@ -1,7 +1,7 @@
 <script lang="ts">
  import {onDestroy, onMount, tick} from 'svelte'
  import {
-  ESTADO_INICIAL, SECOES, GRUPOS, EMOJI_GRUPO, ORIGENS, CORES, revisar, criarLista, atualizarLista, removerLista, criarItem,
+  ESTADO_INICIAL, SECOES, GRUPOS, EMOJI_GRUPO, CORES, revisar, criarLista, atualizarLista, removerLista, criarItem,
   atualizarItem, removerItem, definirQuantidade, alternarStatus, marcarItem, registrarPesquisa, contar, relatorio,
   relatorioFechamento, normalizar, ordemGrupo, listasDaSecao, entradasDaSecao, faltantesAbertos, incluirFaltantes,
   descartarFaltante, irPara, fecharCompra, embalagemDaUnidade, rotuloItem, qtdDecimal, lerQtd, formatarQtd,
@@ -21,7 +21,6 @@
  const CHAVE_JANELA = 'thb.compras.janela'
  const CHAVE_SECAO = 'thb.compras.secao'
  const CHAVE_TEMA = 'thb.compras.tema'
- type Tema = 'sistema' | 'claro' | 'escuro'
  const JANELAS = [{d: 30, r: '30 dias'}, {d: 90, r: '90 dias'}, {d: 180, r: '180 dias'}, {d: 0, r: 'Tudo'}]
 
  let estado = $state<EstadoCompras>(ESTADO_INICIAL)
@@ -33,7 +32,6 @@
  let busca = $state('')
  let soEscolhidos = $state(false)
  let filtroLista = $state('todas')
- let filtroOrigem = $state('todas')
  let filtroStatus = $state<'todos' | Status>('todos')
  let aberto = $state('')
  let destaque = $state('')
@@ -46,7 +44,7 @@
  let erroSync = $state('')
  // editor de item
  let editId = $state<string | undefined>(undefined)
- let eNome = $state(''); let eUnidade = $state(''); let eGrupo = $state('Outros'); let eOrigem = $state('Mercado')
+ let eNome = $state(''); let eUnidade = $state(''); let eGrupo = $state('Outros')
  let eVinculos = $state<Vinculo[]>([]); let eBusca = $state(''); let eAuto = $state<boolean | undefined>(undefined)
  // novo item rápido (montar)
  let nNome = $state(''); let nUnidade = $state(''); let nGrupo = $state('Outros')
@@ -60,7 +58,7 @@
  let lendo = $state(false); let video = $state<HTMLVideoElement>(); let pararLeitura: (() => void) | undefined
  let lidoProduto = $state<ProdutoInfo | undefined>(undefined); let lidoCodigo = $state('')
  let arquivoBackup = $state<HTMLInputElement>()
- let tema = $state<Tema>('sistema')
+ let escuro = $state(false)
  let teclado = $state(0)
 
  const indice = $derived(snapshot ? indexar(snapshot) : undefined)
@@ -92,14 +90,12 @@
  const lojasVisiveis = $derived(filtroLista === 'todas' ? lojas.map(l => l.id) : [filtroLista])
  const entradasVisiveis = $derived(entradas.filter(x => lojasVisiveis.includes(x.listaId)))
  const contagem = $derived(contar(entradasVisiveis))
- const origens = $derived([...new Set(entradas.map(x => itemPorId.get(x.itemId)?.origem ?? 'Mercado'))].sort())
  /** Grupos da lista da semana (tela Comprar). */
  const compra = $derived.by(() => {
   const q = normalizar(busca)
   const ids = [...new Set(entradasVisiveis.map(x => x.itemId))]
   const lista = ids.map(id => itemPorId.get(id)!).filter(i => i
    && (!q || normalizar(i.nome).includes(q))
-   && (filtroOrigem === 'todas' || i.origem === filtroOrigem)
    && (filtroStatus === 'todos' || entradasVisiveis.some(x => x.itemId === i.id && x.status === filtroStatus)))
   return agrupar(lista)
  })
@@ -126,17 +122,16 @@
    const salvo = localStorage.getItem(CHAVE_JANELA); const j = Number(salvo)
    if (salvo !== null && JANELAS.some(x => x.d === j)) janela = j
    const s = localStorage.getItem(CHAVE_SECAO); if (s === 'producao' || s === 'bebidas') secao = s
-   const t = localStorage.getItem(CHAVE_TEMA); if (t === 'claro' || t === 'escuro' || t === 'sistema') tema = t
   } catch {/* sem localStorage */}
   document.documentElement.classList.add('modo-app')
-  aplicarTema()
-  escuroSistema?.addEventListener('change', aplicarTema)
+  temaInicial()
+  lerEndereco()
+  window.addEventListener('hashchange', lerEndereco)
   window.visualViewport?.addEventListener('resize', aoMudarViewport)
   window.visualViewport?.addEventListener('scroll', aoMudarViewport)
   const [bruto, snap] = await Promise.all([ler<unknown>('estado'), ler<unknown>('snapshot')])
   estado = revisar(bruto)
   if (validarSnapshot(snap)) snapshot = snap
-  tela = estado.ciclos[secao].etapa
   carregado = true
   void pedirPersistencia()
   if (token && (!snapshot || Date.now() - Date.parse(snapshot.geradoEm) > 6 * 3600e3)) void sincronizar(true)
@@ -146,20 +141,45 @@
   if (typeof document === 'undefined') return
   document.documentElement.classList.remove('modo-app')
   delete document.documentElement.dataset.tema
-  escuroSistema?.removeEventListener('change', aplicarTema)
+  window.removeEventListener('hashchange', lerEndereco)
   window.visualViewport?.removeEventListener('resize', aoMudarViewport)
   window.visualViewport?.removeEventListener('scroll', aoMudarViewport)
  })
 
  // ---------- tema ----------
- const escuroSistema = typeof matchMedia === 'function' ? matchMedia('(prefers-color-scheme: dark)') : undefined
+ /** Ao abrir: escuro das 18h às 6h. O botão ☾/☀ troca na hora e vale até fechar a aba. */
+ function temaInicial() {
+  let manual: string | null = null
+  try {manual = sessionStorage.getItem(CHAVE_TEMA)} catch {/* sem sessionStorage */}
+  const h = new Date().getHours()
+  escuro = manual ? manual === 'escuro' : h >= 18 || h < 6
+  aplicarTema()
+ }
  /** Aplica o tema só enquanto a seção de compras está aberta (as outras telas são só claras). */
  function aplicarTema() {
-  const escuro = tema === 'escuro' || (tema === 'sistema' && !!escuroSistema?.matches)
   document.documentElement.dataset.tema = escuro ? 'escuro' : 'claro'
   document.querySelector('meta[name="theme-color"]')?.setAttribute('content', escuro ? '#0e1512' : '#153c35')
  }
- function escolherTema(t: Tema) {tema = t; aplicarTema(); try {localStorage.setItem(CHAVE_TEMA, t)} catch {/* não persiste */}}
+ function alternarTema() {
+  escuro = !escuro; aplicarTema()
+  try {sessionStorage.setItem(CHAVE_TEMA, escuro ? 'escuro' : 'claro')} catch {/* não persiste */}
+ }
+
+ // ---------- endereço ----------
+ // #/compras/<seção>/<tela>: cada seção e etapa tem link próprio para compartilhar.
+ const SLUG_TELA: Record<Tela, string> = {montar: 'montar', comprar: 'comprar', fechar: 'fechar', catalogo: 'catalogo', lojas: 'lojas', precos: 'ajustes'}
+ /** Lê seção e tela do endereço (link compartilhado ou voltar do navegador). */
+ function lerEndereco() {
+  const [modulo, s, t] = location.hash.replace(/^#\/?/, '').split('/')
+  if (modulo !== 'compras') return
+  if (s === 'producao' || s === 'bebidas') secao = s
+  const tl = (Object.keys(SLUG_TELA) as Tela[]).find(k => SLUG_TELA[k] === t)
+  if (tl) tela = tl
+ }
+ $effect(() => {
+  const alvo = `#/compras/${secao}/${SLUG_TELA[tela]}`
+  if (location.hash !== alvo) history.replaceState(null, '', location.pathname + location.search + alvo)
+ })
 
  // ---------- teclado virtual ----------
  // O iOS não encolhe a página quando o teclado abre: só o visualViewport. Medimos a área coberta,
@@ -216,7 +236,7 @@
  function numDec(t: string) {const n = Number(t.trim().replace(',', '.')); return Number.isFinite(n) ? n : NaN}
  function pct(v?: number) {return v == null ? '' : `${v > 0 ? '+' : ''}${(v * 100).toFixed(0)}%`}
  function trocarSecao(s: Secao) {
-  secao = s; tela = estado.ciclos[s].etapa; busca = ''; filtroLista = 'todas'; filtroOrigem = 'todas'; filtroStatus = 'todos'; aberto = ''; editId = undefined
+  secao = s; busca = ''; filtroLista = 'todas'; filtroStatus = 'todos'; aberto = ''; editId = undefined
   try {localStorage.setItem(CHAVE_SECAO, s)} catch {/* não persiste */}
  }
  function irTela(t: Tela) {tela = t; busca = ''; editId = undefined; aberto = ''; if (t === 'fechar') levar = {}; window.scrollTo({top: 0})}
@@ -316,7 +336,7 @@
  // ---------- catálogo ----------
  function editar(item?: Item) {
   editId = item?.id ?? ''
-  eNome = item?.nome ?? ''; eUnidade = item?.unidade ?? ''; eGrupo = item?.grupo ?? GRUPOS[secao][0]; eOrigem = item?.origem ?? 'Mercado'
+  eNome = item?.nome ?? ''; eUnidade = item?.unidade ?? ''; eGrupo = item?.grupo ?? GRUPOS[secao][0]
   eVinculos = item ? [...item.vinculos] : []; eBusca = ''; eAuto = item?.vinculoAuto
   if (tela !== 'catalogo') tela = 'catalogo'
   void tick().then(() => document.getElementById('editor-item')?.scrollIntoView({behavior: 'smooth', block: 'start'}))
@@ -327,7 +347,7 @@
   const vinculos = $state.snapshot(eVinculos)
   // vínculo automático confirmado ao salvar; vínculos apagados à mão não voltam sozinhos
   const vinculoAuto = vinculos.length ? undefined : (eAuto !== undefined ? false : undefined)
-  const campos = {nome, unidade: eUnidade.trim(), grupo: eGrupo, origem: eOrigem, embalagem: embalagemDaUnidade(eUnidade), vinculos, vinculoAuto}
+  const campos = {nome, unidade: eUnidade.trim(), grupo: eGrupo, embalagem: embalagemDaUnidade(eUnidade), vinculos, vinculoAuto}
   let id = editId
   if (id) estado = atualizarItem(estado, id, campos)
   else {const r = criarItem(estado, {...campos, secao}); estado = r.estado; id = r.item.id}
@@ -386,7 +406,7 @@
   lidoProduto = p
   const item = p && itemDoProduto(p)
   if (item && qtdPorItem.has(item.id)) {
-   busca = ''; filtroStatus = 'todos'; filtroOrigem = 'todas'; aberto = ''; abrir(item); destacar(item.id); lidoProduto = undefined; lidoCodigo = ''
+   busca = ''; filtroStatus = 'todos'; aberto = ''; abrir(item); destacar(item.id); lidoProduto = undefined; lidoCodigo = ''
    void tick().then(() => document.getElementById(`item-${item.id}`)?.scrollIntoView({behavior: 'smooth', block: 'center'}))
   }
  }
@@ -402,7 +422,7 @@
  }
 </script>
 
-{#snippet unid(item: Item)}{#if item.unidade}<span class="un">{item.unidade}</span>{/if}{#if item.origem !== 'Mercado'}<span class="orig">{item.origem}</span>{/if}{/snippet}
+{#snippet unid(item: Item)}{#if item.unidade}<span class="un">{item.unidade}</span>{/if}{/snippet}
 
 {#snippet precos(item: Item, r: Resumo | undefined)}
  {#if r}
@@ -444,9 +464,10 @@
    <div class="secoes" role="tablist" aria-label="Seção de compras">
     {#each SECOES as s (s.id)}
      {@const n = entradasDaSecao(estado, s.id).length}
-     <button role="tab" aria-selected={secao === s.id} class:on={secao === s.id} onclick={() => trocarSecao(s.id)}>{s.emoji} {s.nome}{#if n}<i>{n}</i>{/if}</button>
+     <button role="tab" aria-selected={secao === s.id} class:on={secao === s.id} onclick={() => trocarSecao(s.id)} title={s.nome}>{s.emoji} {s.curto}{#if n}<i>{n}</i>{/if}</button>
     {/each}
    </div>
+   <button class="tema" onclick={alternarTema} aria-label={escuro ? 'Usar tema claro' : 'Usar tema escuro'} title={escuro ? 'Tema claro' : 'Tema escuro'}>{escuro ? '☀' : '☾'}</button>
    <button class="sync" class:girando={sincronizando} onclick={() => sincronizar()} disabled={sincronizando} aria-label="Sincronizar preços">⟳<span>{snapshot ? dataCurta(snapshot.geradoEm.slice(0, 10)) : 'preços'}</span></button>
   </div>
   {#if tela === 'catalogo' || tela === 'lojas' || tela === 'precos'}
@@ -541,17 +562,10 @@
     <button class="metrica m-{s}" class:on={filtroStatus === s} onclick={() => filtroStatus = filtroStatus === s ? 'todos' : s as Status}><strong>{contagem[s as Status]}</strong><span>{ic} {r}</span></button>
    {/each}
   </div>
-  {#if lojas.length > 1 || origens.length > 1}
+  {#if lojas.length > 1}
    <div class="chips-filtro">
-    {#if lojas.length > 1}
-     <button class:on={filtroLista === 'todas'} onclick={() => filtroLista = 'todas'}>Todas</button>
-     {#each lojas as l (l.id)}<button class:on={filtroLista === l.id} style="--cor:{l.cor}" onclick={() => filtroLista = l.id}><b class="sigla">{l.sigla}</b>{l.nome}</button>{/each}
-    {/if}
-    {#if origens.length > 1}
-     <span class="sep"></span>
-     <button class:on={filtroOrigem === 'todas'} onclick={() => filtroOrigem = 'todas'}>Toda origem</button>
-     {#each origens as o (o)}<button class:on={filtroOrigem === o} onclick={() => filtroOrigem = o}>{o}</button>{/each}
-    {/if}
+    <button class:on={filtroLista === 'todas'} onclick={() => filtroLista = 'todas'}>Todas</button>
+    {#each lojas as l (l.id)}<button class:on={filtroLista === l.id} style="--cor:{l.cor}" onclick={() => filtroLista = l.id}><b class="sigla">{l.sigla}</b>{l.nome}</button>{/each}
    </div>
   {/if}
   <div class="busca">
@@ -636,7 +650,7 @@
     </article>
    {/each}
   {:else}
-   <p class="vazio-curto">Nada com esse filtro.{#if filtroStatus !== 'todos' || busca || filtroOrigem !== 'todas'} <button class="link" onclick={() => {filtroStatus = 'todos'; busca = ''; filtroOrigem = 'todas'}}>mostrar tudo</button>{/if}</p>
+   <p class="vazio-curto">{#if !entradas.length}Nenhum item escolhido em {SECOES.find(x => x.id === secao)?.nome}. <button class="link" onclick={() => irTela('montar')}>Montar a lista</button>{:else}Nada com esse filtro.{/if}{#if entradas.length && (filtroStatus !== 'todos' || busca)} <button class="link" onclick={() => {filtroStatus = 'todos'; busca = ''}}>mostrar tudo</button>{/if}</p>
   {/each}
   <div class="exportar">
    <p class="rotulo">Enviar no WhatsApp</p>
@@ -693,9 +707,8 @@
     <label for="e-nome">Nome</label><input id="e-nome" bind:value={eNome} placeholder="Maionese" required/>
     <div class="row">
      <div><label for="e-un">Unidade na loja</label><input id="e-un" bind:value={eUnidade} placeholder="kg, 2,8 kg, 900 ml, fd"/></div>
-     <div><label for="e-orig">Origem</label><select id="e-orig" bind:value={eOrigem}>{#each [...new Set([...ORIGENS, eOrigem])] as o (o)}<option value={o}>{o}</option>{/each}</select></div>
+     <div><label for="e-grupo">Grupo</label><select id="e-grupo" bind:value={eGrupo}>{#each [...new Set([...GRUPOS[secao], eGrupo])] as gr (gr)}<option value={gr}>{EMOJI_GRUPO[gr] ?? '📌'} {gr}</option>{/each}</select></div>
     </div>
-    <label for="e-grupo">Grupo</label><select id="e-grupo" bind:value={eGrupo}>{#each [...new Set([...GRUPOS[secao], eGrupo])] as gr (gr)}<option value={gr}>{EMOJI_GRUPO[gr] ?? '📌'} {gr}</option>{/each}</select>
     {#if embalagemDaUnidade(eUnidade)}{@const em = embalagemDaUnidade(eUnidade)!}<p class="small">Comparação na gôndola usa {String(em.qtd).replace('.', ',')} {rotulo(em.unidade)} por embalagem.</p>{/if}
     <p class="rotulo">Vínculo com compras (NF-e / Saipos)</p>
     {#if eVinculos.length}
@@ -772,8 +785,8 @@
  {:else}
   <div class="bloco">
    <p class="rotulo">Aparência</p>
-   <div class="janelas">{#each [['sistema', 'Automático'], ['claro', 'Claro'], ['escuro', 'Escuro']] as [t, r] (t)}<button class:on={tema === t} onclick={() => escolherTema(t as Tema)}>{r}</button>{/each}</div>
-   <p class="small">Automático segue o modo do celular.</p>
+   <div class="janelas"><button class:on={!escuro} onclick={() => escuro && alternarTema()}>☀ Claro</button><button class:on={escuro} onclick={() => !escuro && alternarTema()}>☾ Escuro</button></div>
+   <p class="small">Ao abrir a página o tema segue o horário: escuro das 18h às 6h. O botão ☾/☀ no topo troca a qualquer momento e a escolha vale até fechar a aba.</p>
   </div>
   <div class="bloco">
    <p class="rotulo">Preços das NF-e (Supabase)</p>
@@ -801,22 +814,22 @@
 <style>
  .compras{--sup:#fff;--fundo:#f5f4ef;--fundo-t:#f5f4efee;--pri:#193f35;--tx:#10251f;--tx2:#45594f;--tx3:#65766f;--bd:#c7d2c8;--bd2:#eef1ec;--f1:#eef2ec;--ok-f:#e7f3ea;--ok-b:#9fc7ad;--er-f:#f8e5e0;--er-b:#e3b9ae;--er-t:#8f3e2c;--av-f:#fcf3dc;--av-b:#e7c98e;--av-t:#7a5a1d;--rx-f:#f1e8f6;--rx-t:#7b3fa0;--az-f:#eef3f8;--az-t:#2f6f9f;--v:#1f6a43;--r:#b83d3d;--a:#9a6b16;max-width:760px;padding-bottom:calc(84px + var(--teclado,0px));color:var(--tx)}
  :global(html[data-tema='escuro']) .compras{--sup:#17211d;--fundo:#0e1512;--fundo-t:#0e1512ee;--pri:#2f8462;--tx:#e6eee9;--tx2:#bccbc2;--tx3:#8fa198;--bd:#33443c;--bd2:#222e29;--f1:#1f2b26;--ok-f:#173326;--ok-b:#2f6b4b;--er-f:#3a1f1b;--er-b:#7a3a2f;--er-t:#f0a493;--av-f:#33280f;--av-b:#7a6127;--av-t:#e8c57c;--rx-f:#2d2236;--rx-t:#cfa2ea;--az-f:#18242f;--az-t:#8cc0ea;--v:#4cb57d;--r:#e0706a;--a:#d6a845;color-scheme:dark}
- :global(html.modo-app),:global(html.modo-app body){overflow-x:clip;overscroll-behavior-x:none;max-width:100%;touch-action:pan-y pinch-zoom;-webkit-text-size-adjust:100%}
+ :global(html.modo-app),:global(html.modo-app body){overflow-x:clip;overscroll-behavior-x:none;max-width:100%;-webkit-text-size-adjust:100%}
  :global(html[data-tema='escuro']),:global(html[data-tema='escuro'] body),:global(html[data-tema='escuro'] .app),:global(html[data-tema='escuro'] main){background:#0e1512!important;color:#e6eee9}
  :global(html[data-tema='escuro'] aside){background:#0b110f!important;border-color:#222e29!important}
  :global(html.modo-app) .compras :is(button,input){-webkit-tap-highlight-color:transparent}
  .com-teclado .barra{display:none}
  :global(html[data-tema='escuro']) .toast{background:#e6eee9;color:#0e1512}
- .eyebrow{font-size:10px;font-weight:700;letter-spacing:2px;color:var(--tx3);margin:0}
- .small{font-size:12px;line-height:1.55;color:var(--tx3);margin:10px 0 0}
- .lead{font-size:13px;color:var(--tx2);margin:14px 0 4px}
- label{display:block;margin:14px 0 6px;font-size:12px;font-weight:600}
- input,select{width:100%;border:1px solid var(--bd);border-radius:8px;padding:11px 12px;background:var(--sup);color:var(--tx);font-size:16px}
+ .eyebrow{font-size:12px;font-weight:700;letter-spacing:2px;color:var(--tx3);margin:0}
+ .small{font-size:14px;line-height:1.55;color:var(--tx3);margin:10px 0 0}
+ .lead{font-size:15px;color:var(--tx2);margin:14px 0 4px}
+ label{display:block;margin:14px 0 6px;font-size:14px;font-weight:600}
+ input,select{width:100%;border:1px solid var(--bd);border-radius:8px;padding:11px 12px;background:var(--sup);color:var(--tx);font-size:17px}
  input[type=checkbox]{width:20px;height:20px;padding:0;accent-color:var(--pri);flex:0 0 auto}
  select{padding:10px 8px}
  button{font:inherit;cursor:pointer;color:inherit}
  button:disabled{opacity:.45;cursor:default}
- .primary,.secondary{padding:13px 16px;border-radius:9px;font-size:14px;font-weight:600;margin-top:10px;width:100%}
+ .primary,.secondary{padding:13px 16px;border-radius:9px;font-size:16px;font-weight:600;margin-top:10px;width:100%}
  .primary{background:var(--pri);color:#fff;border:1px solid var(--pri)}
  .secondary{background:var(--sup);color:var(--pri);border:1px solid var(--bd)}
  .curto{width:auto;margin-top:0;padding:10px 14px}
@@ -825,66 +838,68 @@
  .fixo{position:sticky;top:0;z-index:6;background:var(--fundo);margin:0 -2px;padding:8px 2px 6px;padding-top:calc(8px + env(safe-area-inset-top))}
  .cabeca{display:flex;gap:8px;align-items:stretch;margin-top:8px}
  .secoes{flex:1;display:flex;background:var(--f1);border-radius:12px;padding:4px;gap:4px;min-width:0}
- .secoes button{flex:1;border:0;background:transparent;border-radius:9px;padding:10px 6px;font-size:13px;font-weight:700;color:var(--tx2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+ .secoes button{flex:1;border:0;background:transparent;border-radius:9px;padding:10px 6px;font-size:15px;font-weight:700;color:var(--tx2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
  .secoes button.on{background:var(--pri);color:#fff}
- .secoes i,.passos i{font-style:normal;font-size:10px;background:#d9a43a;color:#fff;border-radius:99px;padding:1px 6px;margin-left:5px}
- .sync{display:grid;justify-items:center;align-content:center;border:1px solid var(--bd);background:var(--sup);border-radius:12px;padding:4px 10px;font-size:18px;color:var(--pri);min-width:58px}
- .sync span{font-size:10px;color:var(--tx3)}
+ .secoes i,.passos i{font-style:normal;font-size:12px;background:#d9a43a;color:#fff;border-radius:99px;padding:1px 6px;margin-left:5px}
+ .sync{display:grid;justify-items:center;align-content:center;border:1px solid var(--bd);background:var(--sup);border-radius:12px;padding:4px 10px;font-size:20px;color:var(--pri);min-width:58px}
+ .tema{flex:0 0 48px;border:1px solid var(--bd);background:var(--sup);border-radius:12px;font-size:21px;color:var(--tx2);padding:0}
+ .sync span{font-size:12px;color:var(--tx3)}
  .sync.girando{animation:gira 1s linear infinite}
  @keyframes gira{to{transform:rotate(360deg)}}
  .passos{display:flex;gap:6px}
- .passos button{flex:1;display:flex;align-items:center;justify-content:center;gap:6px;border:1px solid var(--bd);background:var(--sup);border-radius:10px;padding:9px 4px;font-size:13px;font-weight:700;color:var(--tx2)}
- .passos button b{display:inline-grid;place-items:center;width:20px;height:20px;border-radius:50%;background:var(--f1);font-size:11px}
- .passos button small{font-size:10px;font-weight:600;color:var(--tx3)}
+ .passos button{flex:1;display:flex;align-items:center;justify-content:center;gap:6px;border:1px solid var(--bd);background:var(--sup);border-radius:10px;padding:9px 4px;font-size:15px;font-weight:700;color:var(--tx2)}
+ .passos button b{display:inline-grid;place-items:center;width:20px;height:20px;border-radius:50%;background:var(--f1);font-size:13px}
+ .passos button small{font-size:12px;font-weight:600;color:var(--tx3)}
+ .passos button.on:disabled{opacity:1}
  .passos button.on{border-color:var(--pri);background:var(--pri);color:#fff}
  .passos button.on b{background:var(--sup);color:var(--pri)}
  .passos button.on small{color:#cfe0d4}
- .passos .mais{flex:0 0 46px;font-size:17px}
+ .passos .mais{flex:0 0 46px;font-size:19px}
  .sub{display:flex;gap:6px;margin-top:4px}
- .sub button{flex:1;border:0;border-bottom:2px solid transparent;background:transparent;padding:8px 2px;font-size:12px;font-weight:700;color:var(--tx3)}
+ .sub button{flex:1;border:0;border-bottom:2px solid transparent;background:transparent;padding:8px 2px;font-size:14px;font-weight:700;color:var(--tx3)}
  .sub button.on{border-color:var(--pri);color:var(--tx)}
- .alerta{font-size:12px;color:var(--av-t);background:var(--av-f);border-radius:8px;padding:9px 12px;margin:10px 0}
+ .alerta{font-size:14px;color:var(--av-t);background:var(--av-f);border-radius:8px;padding:9px 12px;margin:10px 0}
  .vazio{display:grid;gap:4px;margin-top:18px;padding:20px;border:1px dashed var(--bd);border-radius:12px;background:var(--f1)}
- .vazio h2{font-size:18px;margin:0}
- .vazio-curto{font-size:13px;color:var(--tx3);text-align:center;padding:18px 0}
+ .vazio h2{font-size:20px;margin:0}
+ .vazio-curto{font-size:15px;color:var(--tx3);text-align:center;padding:18px 0}
  .faltantes{border:1px solid var(--av-b);background:var(--av-f);border-radius:12px;padding:10px 12px;margin-top:12px}
- .ft-cab{display:flex;justify-content:space-between;align-items:center;font-size:13px}
+ .ft-cab{display:flex;justify-content:space-between;align-items:center;font-size:15px}
  .ft{display:flex;align-items:center;gap:8px;padding:7px 0;border-top:1px solid var(--bd2)}
- .ft-nome{flex:1;min-width:0;font-size:13px;font-weight:600}
- .ft-nome small{display:block;font-weight:400;color:var(--av-t);font-size:11px}
- .mini-ok,.mini-x{width:36px;height:34px;border-radius:8px;border:1px solid var(--bd);background:var(--sup);font-size:17px;flex:0 0 auto}
+ .ft-nome{flex:1;min-width:0;font-size:15px;font-weight:600}
+ .ft-nome small{display:block;font-weight:400;color:var(--av-t);font-size:13px}
+ .mini-ok,.mini-x{width:36px;height:34px;border-radius:8px;border:1px solid var(--bd);background:var(--sup);font-size:19px;flex:0 0 auto}
  .mini-ok{color:#1f6a43;border-color:var(--ok-b)}
  .mini-x{color:var(--er-t)}
  .busca{display:flex;gap:8px;margin-top:12px}
  .busca input{flex:1}
- .filtro{flex:0 0 auto;border:1px solid var(--bd);background:var(--sup);border-radius:8px;padding:0 14px;font-size:13px;font-weight:600}
+ .filtro{flex:0 0 auto;border:1px solid var(--bd);background:var(--sup);border-radius:8px;padding:0 14px;font-size:15px;font-weight:600}
  .filtro.on{background:var(--pri);color:#fff;border-color:var(--pri)}
- .grupo{font-size:14px;margin:18px 0 6px;letter-spacing:0}
+ .grupo{font-size:16px;margin:18px 0 6px;letter-spacing:0}
  .tabela{background:var(--sup);border:1px solid var(--bd);border-radius:12px;overflow:hidden}
  .linha{display:flex;align-items:center;gap:8px;padding:8px 10px;border-top:1px solid var(--bd2);min-height:52px;transition:background .3s}
  .linha:first-child{border-top:0}
  .linha.sel{background:var(--ok-f)}
  .linha.destaque{background:var(--ok-f)}
  .ln-nome{flex:1;min-width:0;display:flex;flex-wrap:wrap;align-items:center;gap:4px 6px}
- .t{font-size:14px;font-weight:600;color:var(--tx)}
- .un{font-size:11px;font-weight:700;color:var(--tx2);background:var(--f1);border-radius:6px;padding:2px 6px;white-space:nowrap}
- .orig{font-size:10px;font-weight:700;color:var(--rx-t);background:var(--rx-f);border-radius:6px;padding:2px 6px}
- .px{flex-basis:100%;font-size:11px;color:var(--tx3)}
+ .t{font-size:16px;font-weight:600;color:var(--tx)}
+ .un{font-size:13px;font-weight:700;color:var(--tx2);background:var(--f1);border-radius:6px;padding:2px 6px;white-space:nowrap}
+ .orig{font-size:12px;font-weight:700;color:var(--rx-t);background:var(--rx-f);border-radius:6px;padding:2px 6px}
+ .px{flex-basis:100%;font-size:13px;color:var(--tx3)}
  .ln-m{flex-wrap:wrap;row-gap:6px;padding:9px 10px 10px}
  .ln-m .ln-nome{flex:1 1 100%}
  .stps{flex:1 1 100%;display:grid;grid-template-columns:repeat(var(--n,1),minmax(0,1fr));gap:8px}
- .stp{display:grid;grid-template-columns:auto 40px minmax(36px,1fr) 40px;align-items:center;gap:0;border:1px solid var(--bd);border-radius:10px;background:var(--sup);overflow:hidden;height:42px}
+ .stp{display:grid;grid-template-columns:auto 44px minmax(36px,1fr) 44px;align-items:center;gap:0;border:1px solid var(--bd);border-radius:10px;background:var(--sup);overflow:hidden;height:46px}
  .stp.on{border-color:var(--cor);box-shadow:0 0 0 1px var(--cor) inset}
- .stp-loja{align-self:stretch;display:grid;place-items:center;padding:0 7px;font-size:10px;font-weight:800;letter-spacing:.3px;color:var(--cor);background:var(--f1);border-right:1px solid var(--bd)}
+ .stp-loja{align-self:stretch;display:grid;place-items:center;padding:0 7px;font-size:12px;font-weight:800;letter-spacing:.3px;color:var(--cor);background:var(--f1);border-right:1px solid var(--bd)}
  .stp.on .stp-loja{background:var(--cor);color:#fff;border-color:var(--cor)}
  .stp-b{height:100%;border:0;background:transparent;font-size:22px;font-weight:600;line-height:1;color:var(--tx2);padding:0;touch-action:manipulation}
  .stp-b:active:not(:disabled){background:var(--f1)}
  .stp-b:disabled{opacity:.25}
- .stp input{height:100%;width:100%;min-width:0;border:0;border-radius:0;padding:0 2px;text-align:center;font-size:16px;font-weight:700;background:transparent;font-variant-numeric:tabular-nums}
+ .stp input{height:100%;width:100%;min-width:0;border:0;border-radius:0;padding:0 2px;text-align:center;font-size:17px;font-weight:700;background:transparent;font-variant-numeric:tabular-nums}
  .stp input::placeholder{color:var(--tx3);font-weight:500;opacity:.6}
  .stp input:focus{outline:none;background:var(--ok-f)}
  .novo{background:var(--sup);border:1px dashed var(--bd);border-radius:12px;padding:4px 12px 12px;margin-top:18px}
- .rotulo{font-size:12px;font-weight:700;margin:18px 0 8px;color:var(--pri)}
+ .rotulo{font-size:14px;font-weight:700;margin:18px 0 8px;color:var(--pri)}
  .rotulo small{font-weight:400;color:var(--tx3)}
  .linha-acoes{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:6px}
  .linha-acoes input{flex:1;min-width:90px}
@@ -900,21 +915,20 @@
  .metricas{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:14px 0 10px}
  .metrica{border:0;border-radius:11px;background:var(--sup);padding:10px 4px;display:grid;gap:2px;text-align:center;box-shadow:0 0 0 1px var(--bd) inset}
  .metrica strong{font-size:24px;font-variant-numeric:tabular-nums}
- .metrica span{font-size:11px;color:var(--tx3)}
+ .metrica span{font-size:13px;color:var(--tx3)}
  .m-comprado strong{color:var(--v)} .m-indisponivel strong{color:var(--r)}
  .metrica.on{box-shadow:0 0 0 2px var(--pri) inset}
  .chips-filtro{display:flex;gap:6px;overflow-x:auto;padding-bottom:4px;scrollbar-width:none;align-items:center}
- .chips-filtro button{flex:0 0 auto;border:1px solid var(--bd);background:var(--sup);border-radius:99px;padding:7px 12px;font-size:12px;font-weight:600;color:var(--tx2);display:flex;align-items:center;gap:6px}
+ .chips-filtro button{flex:0 0 auto;border:1px solid var(--bd);background:var(--sup);border-radius:99px;padding:7px 12px;font-size:14px;font-weight:600;color:var(--tx2);display:flex;align-items:center;gap:6px}
  .chips-filtro button.on{background:var(--pri);color:#fff;border-color:var(--pri)}
- .chips-filtro .sep{flex:0 0 1px;height:22px;background:var(--bd)}
- .sigla{display:inline-grid;place-items:center;min-width:20px;height:20px;padding:0 4px;border-radius:6px;background:var(--cor,var(--tx3));color:#fff;font-size:11px;font-weight:800;flex:0 0 auto}
- .ean{border:1px solid var(--pri);background:var(--pri);color:#fff;border-radius:8px;padding:0 12px;font-size:18px;display:flex;align-items:center;gap:6px}
- .ean span{font-size:12px;font-weight:700}
+ .sigla{display:inline-grid;place-items:center;min-width:20px;height:20px;padding:0 4px;border-radius:6px;background:var(--cor,var(--tx3));color:#fff;font-size:13px;font-weight:800;flex:0 0 auto}
+ .ean{border:1px solid var(--pri);background:var(--pri);color:#fff;border-radius:8px;padding:0 12px;font-size:20px;display:flex;align-items:center;gap:6px}
+ .ean span{font-size:14px;font-weight:700}
  .camera{position:relative;margin-top:10px;border-radius:12px;overflow:hidden;background:#0b1a15}
  .camera video{display:block;width:100%;max-height:42vh;object-fit:cover}
  .mira{position:absolute;left:12%;right:12%;top:50%;height:2px;background:#ff4d4d;box-shadow:0 0 12px #ff4d4d}
  .lido{margin-top:12px;border:1px solid var(--ok-b);background:var(--ok-f);border-radius:12px;padding:14px}
- .lido h3{margin:4px 0 4px;font-size:16px}
+ .lido h3{margin:4px 0 4px;font-size:17px}
  .item{background:var(--sup);border:1px solid var(--bd);border-radius:12px;padding:10px 12px;margin-bottom:8px;transition:background .3s,border-color .3s}
  .item.destaque{background:var(--ok-f);border-color:var(--ok-b)}
  .item.aberto{border-color:var(--ok-b);box-shadow:0 2px 10px #0001}
@@ -923,75 +937,75 @@
  .item.faltou .t{color:var(--r)}
  .cab{display:flex;align-items:center;gap:10px}
  .nome{flex:1;min-width:0;border:0;background:transparent;text-align:left;padding:4px 0;display:flex;align-items:center;gap:5px 7px;flex-wrap:wrap}
- .nome .q,.pl .q{font-size:13px;font-weight:800;color:var(--tx);background:var(--f1);border-radius:6px;padding:2px 7px;font-variant-numeric:tabular-nums}
- .herd{font-size:10px;font-weight:700;color:var(--av-t);background:var(--av-f);border-radius:6px;padding:2px 6px}
+ .nome .q,.pl .q{font-size:15px;font-weight:800;color:var(--tx);background:var(--f1);border-radius:6px;padding:2px 7px;font-variant-numeric:tabular-nums}
+ .herd{font-size:12px;font-weight:700;color:var(--av-t);background:var(--av-f);border-radius:6px;padding:2px 6px}
  .acoes{display:flex;gap:6px}
- .ac{width:46px;height:44px;border-radius:10px;border:1px solid var(--bd);background:var(--sup);font-size:18px;color:var(--tx3)}
+ .ac{width:46px;height:44px;border-radius:10px;border:1px solid var(--bd);background:var(--sup);font-size:20px;color:var(--tx3)}
  .ac.buy.on,.mini.buy.on{background:var(--v);border-color:var(--v);color:#fff}
  .ac.miss.on,.mini.miss.on{background:var(--r);border-color:var(--r);color:#fff}
  .porlista{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0 2px}
  .pl{display:flex;align-items:center;gap:6px;border:1px solid var(--bd);border-radius:10px;padding:4px 4px 4px 6px;background:var(--f1)}
  .pl.st-comprado{background:var(--ok-f);border-color:var(--ok-b)}
  .pl.st-indisponivel{background:var(--er-f);border-color:var(--er-b)}
- .mini{width:36px;height:34px;border-radius:8px;border:1px solid var(--bd);background:var(--sup);font-size:15px;color:var(--tx3)}
+ .mini{width:36px;height:34px;border-radius:8px;border:1px solid var(--bd);background:var(--sup);font-size:17px;color:var(--tx3)}
  .precos{display:grid;grid-template-columns:1fr 1fr auto;gap:8px;margin-top:8px}
  .caixa{border-radius:9px;background:var(--f1);padding:7px 9px;display:grid;gap:1px;min-width:0}
  .caixa.media{background:var(--az-f)}
- .caixa .rot{font-size:10px;letter-spacing:.6px;text-transform:uppercase;color:var(--tx3)}
- .caixa strong{font-size:17px;font-variant-numeric:tabular-nums;color:var(--tx);line-height:1.25}
- .caixa strong small{font-size:11px;font-weight:600;color:var(--tx3);margin-left:1px}
- .caixa .det{font-size:11px;color:var(--tx3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+ .caixa .rot{font-size:12px;letter-spacing:.6px;text-transform:uppercase;color:var(--tx3)}
+ .caixa strong{font-size:19px;font-variant-numeric:tabular-nums;color:var(--tx);line-height:1.25}
+ .caixa strong small{font-size:13px;font-weight:600;color:var(--tx3);margin-left:1px}
+ .caixa .det{font-size:13px;color:var(--tx3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
  .spark{width:64px;height:100%;min-height:40px;color:var(--az-t);align-self:center}
- .sem-hist{font-size:12px;color:var(--tx3);margin:6px 0 0}
- .selo{font-size:11px;font-weight:800;border-radius:99px;padding:2px 8px}
+ .sem-hist{font-size:14px;color:var(--tx3);margin:6px 0 0}
+ .selo{font-size:13px;font-weight:800;border-radius:99px;padding:2px 8px}
  .v-barato{color:var(--v);background:var(--ok-f)} .v-caro{color:var(--r);background:var(--er-f)} .v-na-media{color:var(--a);background:var(--av-f)}
- .veredito{font-size:12px;border-radius:8px;padding:6px 9px;margin:8px 0 0;line-height:1.45}
+ .veredito{font-size:14px;border-radius:8px;padding:6px 9px;margin:8px 0 0;line-height:1.45}
  .detalhe{margin-top:10px;border-top:1px solid var(--bd2);padding-top:4px}
- .por{font-size:12px;color:var(--tx3)}
- .hist{width:100%;border-collapse:collapse;margin-top:12px;font-size:12px}
- .hist th{text-align:left;font-size:10px;letter-spacing:.6px;text-transform:uppercase;color:var(--tx3);padding:4px;border-bottom:1px solid var(--bd2)}
+ .por{font-size:14px;color:var(--tx3)}
+ .hist{width:100%;border-collapse:collapse;margin-top:12px;font-size:14px}
+ .hist th{text-align:left;font-size:12px;letter-spacing:.6px;text-transform:uppercase;color:var(--tx3);padding:4px;border-bottom:1px solid var(--bd2)}
  .hist td{padding:6px 4px;border-bottom:1px solid var(--bd2);vertical-align:top;font-variant-numeric:tabular-nums}
- .hist .emb{display:block;font-size:10px;color:var(--tx3)}
+ .hist .emb{display:block;font-size:12px;color:var(--tx3)}
  .hist .u{font-weight:700;white-space:nowrap}
- .link{border:0;background:transparent;color:var(--az-t);text-decoration:underline;font-size:12px;padding:6px 0}
+ .link{border:0;background:transparent;color:var(--az-t);text-decoration:underline;font-size:14px;padding:6px 0}
  .exportar{margin-top:18px}
  .dois{display:grid;grid-template-columns:1fr 1fr;gap:0 8px}
  .resumo-fim{background:var(--sup);border:1px solid var(--bd);border-radius:12px;padding:14px;margin-top:14px}
- .resumo-fim h2{font-size:19px;line-height:1.3;margin:6px 0 0}
+ .resumo-fim h2{font-size:21px;line-height:1.3;margin:6px 0 0}
  .metricas.fixas{margin-bottom:0}
  .linha.fim{margin:0;font-weight:500;cursor:pointer}
- .linha.fim .st{font-size:11px;color:var(--tx3);white-space:nowrap}
+ .linha.fim .st{font-size:13px;color:var(--tx3);white-space:nowrap}
  .editor{background:var(--sup);border:1px solid var(--ok-b);border-radius:12px;padding:14px;margin-top:14px}
  .chips{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px}
- .chip{display:flex;align-items:center;gap:4px;background:var(--f1);color:var(--tx);border-radius:99px;padding:5px 6px 5px 11px;font-size:12px;font-weight:600}
- .chip button{border:0;background:transparent;font-size:16px;line-height:1;color:var(--tx2);padding:0 4px}
+ .chip{display:flex;align-items:center;gap:4px;background:var(--f1);color:var(--tx);border-radius:99px;padding:5px 6px 5px 11px;font-size:14px;font-weight:600}
+ .chip button{border:0;background:transparent;font-size:17px;line-height:1;color:var(--tx2);padding:0 4px}
  .candidatos{display:grid;gap:6px;margin-top:8px;max-height:300px;overflow:auto}
- .candidatos button{display:grid;text-align:left;gap:2px;border:1px solid var(--bd);background:var(--f1);border-radius:8px;padding:9px 10px;font-size:13px}
- .candidatos small{font-size:11px;color:var(--tx3)}
+ .candidatos button{display:grid;text-align:left;gap:2px;border:1px solid var(--bd);background:var(--f1);border-radius:8px;padding:9px 10px;font-size:15px}
+ .candidatos small{font-size:13px;color:var(--tx3)}
  .cat-nome{flex:1;min-width:0;border:0;background:transparent;text-align:left;display:grid;gap:3px;padding:2px 0}
  .cat-nome > span{display:flex;flex-wrap:wrap;gap:4px 6px;align-items:center}
- .cat-nome small{font-size:11px;color:var(--tx3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+ .cat-nome small{font-size:13px;color:var(--tx3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
  .cat-nome small.auto{color:#9a6b16;font-weight:600}
  .cat-nome small.auto::before{content:'auto · '}
  .bloco{background:var(--sup);border:1px solid var(--bd);border-radius:12px;padding:2px 14px 14px;margin-top:14px}
  .lista-edit{display:grid;grid-template-columns:56px 1fr;gap:8px;align-items:center;border-bottom:1px solid var(--bd2);padding:12px 0}
  .lista-edit .sig{text-align:center;font-weight:800;color:#fff;background:var(--cor);border-color:var(--cor)}
  .lista-edit .secs,.lista-edit .cores,.lista-edit .ord{grid-column:1/-1;display:flex;gap:6px;flex-wrap:wrap}
- .secs label{display:flex;align-items:center;gap:6px;margin:0;font-weight:500;font-size:13px;border:1px solid var(--bd);border-radius:8px;padding:6px 10px}
+ .secs label{display:flex;align-items:center;gap:6px;margin:0;font-weight:500;font-size:15px;border:1px solid var(--bd);border-radius:8px;padding:6px 10px}
  .cores button{width:26px;height:26px;border-radius:50%;border:2px solid transparent}
  .cores button.on{border-color:var(--tx);box-shadow:0 0 0 2px #fff inset}
- .ord button{border:1px solid var(--bd);background:var(--sup);border-radius:7px;padding:6px 12px;font-size:12px}
+ .ord button{border:1px solid var(--bd);background:var(--sup);border-radius:7px;padding:6px 12px;font-size:14px}
  .ord .perigo{margin-left:auto}
- .hist-linha{display:flex;justify-content:space-between;gap:8px;font-size:13px;padding:8px 0;border-bottom:1px solid var(--bd2)}
+ .hist-linha{display:flex;justify-content:space-between;gap:8px;font-size:15px;padding:8px 0;border-bottom:1px solid var(--bd2)}
  .stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:14px}
  .stats div{background:var(--f1);border-radius:9px;padding:10px;display:grid;text-align:center}
  .stats strong{font-size:20px}
- .stats span{font-size:11px;color:var(--tx3)}
+ .stats span{font-size:13px;color:var(--tx3)}
  .janelas{display:flex;gap:6px;flex-wrap:wrap}
- .janelas button{border:1px solid var(--bd);background:var(--sup);border-radius:99px;padding:8px 14px;font-size:12px}
+ .janelas button{border:1px solid var(--bd);background:var(--sup);border-radius:99px;padding:8px 14px;font-size:14px}
  .janelas button.on{background:var(--pri);color:#fff;border-color:var(--pri)}
- .toast{position:fixed;left:50%;bottom:84px;transform:translateX(-50%);background:#0b1a15;color:#fff;border-radius:99px;padding:10px 18px;font-size:13px;z-index:20;box-shadow:0 6px 20px #0003;max-width:90vw;text-align:center}
- @media(max-width:520px){.precos{grid-template-columns:1fr 1fr}.spark{display:none}.caixa strong{font-size:16px}.secoes button{font-size:12px}}
+ .toast{position:fixed;left:50%;bottom:84px;transform:translateX(-50%);background:#0b1a15;color:#fff;border-radius:99px;padding:10px 18px;font-size:15px;z-index:20;box-shadow:0 6px 20px #0003;max-width:90vw;text-align:center}
+ @media(max-width:520px){.precos{grid-template-columns:1fr 1fr}.spark{display:none}.caixa strong{font-size:17px}.secoes button{font-size:14px}}
  @media print{
   :global(aside),:global(header),:global(.notice),:global(footer),.cabeca,.passos,.sub,.metricas,.chips-filtro,.busca,.novo,.barra,.exportar,.acoes,.mini,.detalhe,.spark,.faltantes{display:none!important}
   .item{break-inside:avoid;border-color:#ccc}

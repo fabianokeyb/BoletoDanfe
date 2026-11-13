@@ -7,9 +7,9 @@ import {ehUnidade, type Unidade} from './unidades.ts'
  * Cada seção tem o próprio ciclo: montar a lista → comprar → fechar.
  */
 export type Secao = 'producao' | 'bebidas'
-export const SECOES: {id: Secao, nome: string, emoji: string}[] = [
-  {id: 'producao', nome: 'Produção', emoji: '🍔'},
-  {id: 'bebidas', nome: 'Bebidas e salão', emoji: '🥤'}
+export const SECOES: {id: Secao, nome: string, curto: string, emoji: string}[] = [
+  {id: 'producao', nome: 'Produção', curto: 'Produção', emoji: '🍔'},
+  {id: 'bebidas', nome: 'Bebidas e salão', curto: 'Bebidas', emoji: '🥤'}
 ]
 
 export const GRUPOS: Record<Secao, string[]> = {
@@ -100,7 +100,7 @@ export interface CompraFechada {
 }
 
 export interface EstadoCompras {
-  versao: 3
+  versao: 4
   listas: Lista[]
   itens: Item[]
   entradas: Entrada[]
@@ -112,7 +112,7 @@ export interface EstadoCompras {
 
 const CICLO_NOVO: Ciclo = {etapa: 'montar', nome: '', desde: 0}
 export const ESTADO_INICIAL: EstadoCompras = {
-  versao: 3, listas: [], itens: [], entradas: [], faltantes: [], pesquisa: {},
+  versao: 4, listas: [], itens: [], entradas: [], faltantes: [], pesquisa: {},
   ciclos: {producao: {...CICLO_NOVO}, bebidas: {...CICLO_NOVO}}, historico: []
 }
 const MAX_HISTORICO = 40
@@ -537,7 +537,7 @@ export function revisar(bruto: unknown): EstadoCompras {
       : Array.isArray(l.secoes) && l.secoes.length ? l.secoes : ['producao', 'bebidas']
     return {...l, secoes, sigla: loja && versao < 3 && String(l.sigla).length <= 1 ? loja : String(l.sigla ?? '').slice(0, 4) || 'L'}
   })
-  const itens = arr<Item & {grupo?: string}>(b.itens).filter(i => typeof i.id === 'string').map(i => {
+  let itens = arr<Item & {grupo?: string}>(b.itens).filter(i => typeof i.id === 'string').map(i => {
     const sep = versao < 2 && !i.unidade ? separarUnidade(String(i.nome ?? '')) : {nome: String(i.nome ?? ''), unidade: String(i.unidade ?? '')}
     const secao: Secao = i.secao === 'bebidas' ? 'bebidas' : 'producao'
     const grupo = i.grupo === 'Insumos / Mercado' ? 'Insumos' : i.grupo === 'Bebidas' ? 'Refrigerantes' : (i.grupo || 'Outros')
@@ -547,16 +547,29 @@ export function revisar(bruto: unknown): EstadoCompras {
     return {...i, nome: sep.nome, unidade: sep.unidade, secao, grupo, origem: i.origem || 'Mercado',
       vinculos: Array.isArray(i.vinculos) ? i.vinculos : [], ultimaQtd} as Item
   })
+  // v4: itens do salão que repetem a produção (mesmo nome e unidade) somem; o que estava na lista passa para o item da produção
+  const trocar = new Map<string, string>()
+  if (versao < 4) {
+    const chave = (i: Item) => `${normalizar(i.nome)}|${normalizar(i.unidade).replace(/\s/g, '')}`
+    const daProducao = new Map(itens.filter(i => i.secao === 'producao').map(i => [chave(i), i.id]))
+    for (const i of itens) {const alvo = i.secao === 'bebidas' && daProducao.get(chave(i)); if (alvo) trocar.set(i.id, alvo)}
+  }
+  const unicos = <T extends {listaId: string, itemId: string}>(xs: T[]) => {
+    const vistos = new Set<string>()
+    return xs.map(x => trocar.has(x.itemId) ? {...x, itemId: trocar.get(x.itemId)!} : x)
+      .filter(x => {const k = `${x.listaId}|${x.itemId}`; if (vistos.has(k)) return false; vistos.add(k); return true})
+  }
+  itens = itens.filter(i => !trocar.has(i.id))
   const porId = new Map(itens.map(i => [i.id, i])), lids = new Set(listas.map(l => l.id))
   const qtd = (itemId: string, q: unknown) => {const i = porId.get(itemId); return i ? ajustarQtd(i, qtdAntiga(q) || 1) : 0}
-  const entradas = arr<Entrada>(b.entradas).filter(x => porId.has(x.itemId) && lids.has(x.listaId)).map(x => ({...x, quantidade: qtd(x.itemId, x.quantidade)}))
-  const faltantes = arr<Faltante>(b.faltantes).filter(x => porId.has(x.itemId) && lids.has(x.listaId)).map(x => ({...x, quantidade: qtd(x.itemId, x.quantidade)}))
+  const entradas = unicos(arr<Entrada>(b.entradas)).filter(x => porId.has(x.itemId) && lids.has(x.listaId)).map(x => ({...x, quantidade: qtd(x.itemId, x.quantidade)}))
+  const faltantes = unicos(arr<Faltante>(b.faltantes)).filter(x => porId.has(x.itemId) && lids.has(x.listaId)).map(x => ({...x, quantidade: qtd(x.itemId, x.quantidade)}))
   const c = (b.ciclos ?? {}) as Partial<Record<Secao, Ciclo>>
   const ciclo = (x?: Ciclo): Ciclo => x && ['montar', 'comprar', 'fechar'].includes(x.etapa) ? x : {...CICLO_NOVO}
   // v1 tinha uma rodada única; se havia lista em andamento, ela segue na etapa de compra.
   const producao = versao < 2 && entradas.length ? {etapa: 'comprar' as const, nome: String(b.rodadaNome ?? ''), desde: Number(b.rodadaDesde) || 0} : ciclo(c.producao)
   return {
-    versao: 3, listas, itens, entradas, faltantes,
+    versao: 4, listas, itens, entradas, faltantes,
     pesquisa: b.pesquisa && typeof b.pesquisa === 'object' ? b.pesquisa as Record<string, Pesquisa> : {},
     ciclos: {producao, bebidas: ciclo(c.bebidas)},
     historico: arr<CompraFechada>(b.historico).slice(0, MAX_HISTORICO).map(h => ({...h, itens: arr<CompraFechada['itens'][number]>(h.itens).map(x => ({...x, quantidade: qtdAntiga(x.quantidade)}))}))

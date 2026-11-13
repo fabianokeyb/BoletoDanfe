@@ -75,7 +75,11 @@
  onMount(()=>{
   try{const salvo=localStorage.getItem(CHAVE_FORMATO);if(FORMATOS.some(f=>f.id===salvo))formato=salvo as Formato}catch{/* mantém padrão */}
   try{const e=localStorage.getItem(CHAVE_ESPELHO);if(e!==null){espelhado=e==='1';prefEspelhoExplicita=true}}catch{/* mantém padrão */}
-  try{const v=location.hash==='#compras'?'compras':localStorage.getItem('thb.view');if(v==='compras'||v==='pix'||v==='status'||v==='capture')view=v}catch{/* mantém padrão */}
+  const doLink=viewDoHash();
+  try{const v=doLink??localStorage.getItem('thb.view');if(v==='compras'||v==='pix'||v==='status'||v==='capture')view=v}catch{/* mantém padrão */}
+  if(!doLink)history.replaceState(null,'',location.pathname+location.search+'#/'+SLUG_VIEW[view]);
+  requestAnimationFrame(()=>document.querySelector('nav .active')?.scrollIntoView({inline:'center',block:'nearest'}));
+  window.addEventListener('hashchange',()=>{const v=viewDoHash();if(v&&v!==view)change(v,false)});
   const r=restaurar();estado=r.estado;notaAtivaId=r.notaAtivaId;fornecedores=listaFornecedores();carregado=true
  })
  // A sessão dura enquanto a aba estiver aberta (sobrevive a recarregar, não a fechar).
@@ -203,7 +207,11 @@
  function limpar(){if(!confirmarLimpeza){confirmarLimpeza=true;setTimeout(()=>confirmarLimpeza=false,3000);return}estado=ESTADO_VAZIO;notaAtivaId=undefined;raw='';copia='idle';confirmarLimpeza=false}
 
  function dataBr(iso:string){return iso.split('-').reverse().join('/')}
- function change(next:typeof view){stopCamera();view=next;try{localStorage.setItem('thb.view',next);history.replaceState(null,'',next==='compras'?'#compras':location.pathname)}catch{/* não persiste */};raw='';result='';error='';payload='';qr='';copia='idle';}
+ /** Endereço único de cada módulo: #/captura, #/compras, #/pix, #/status (Compras completa com seção e etapa). */
+ const SLUG_VIEW={capture:'captura',compras:'compras',pix:'pix',status:'status'} as const
+ /** Módulo indicado no endereço, ou null se o hash não aponta para nenhum. */
+ function viewDoHash():typeof view|null{const slug=location.hash.replace(/^#\/?/,'').split('/')[0];const par=Object.entries(SLUG_VIEW).find(([,v])=>v===slug);return par?par[0] as typeof view:null}
+ function change(next:typeof view,gravarHash=true){stopCamera();view=next;try{localStorage.setItem('thb.view',next);if(gravarHash)history.replaceState(null,'',location.pathname+location.search+'#/'+SLUG_VIEW[next])}catch{/* não persiste */};raw='';result='';error='';payload='';qr='';copia='idle';}
  function adicionarManual(){
   if(raw.replace(/\D/g,'').length===44){const n=interpretarChaveNFe(raw);if(n.ok){registrarNota(n.nota);raw='';return}}
   if(lido.ok)registrarDocumento(lido.codigo);else error=lido.erro
