@@ -1,235 +1,282 @@
 <script lang="ts">
  import {onDestroy, onMount, tick} from 'svelte'
  import {
-  ESTADO_INICIAL, GRUPOS, EMOJI_GRUPO, CORES, revisar, criarLista, atualizarLista, removerLista, criarItem, atualizarItem,
-  removerItem, definirQuantidade, alternarStatus, marcarItem, registrarPesquisa, novaRodada, metricas, relatorio,
-  normalizar, ordemGrupo, type EstadoCompras, type Item, type Lista, type Status, type ModoRelatorio, type Entrada
+  ESTADO_INICIAL, SECOES, GRUPOS, EMOJI_GRUPO, ORIGENS, CORES, revisar, criarLista, atualizarLista, removerLista, criarItem,
+  atualizarItem, removerItem, definirQuantidade, alternarStatus, marcarItem, registrarPesquisa, contar, relatorio,
+  relatorioFechamento, normalizar, ordemGrupo, listasDaSecao, entradasDaSecao, faltantesAbertos, incluirFaltantes,
+  descartarFaltante, irPara, fecharCompra, embalagemDaUnidade, rotuloItem,
+  type EstadoCompras, type Item, type Lista, type Status, type ModoRelatorio, type Entrada, type Secao, type Faltante
  } from './estado.ts'
- import {indexar, resumir, compararGondola, produtoPorGtin, produtosDosVinculos, reais, formatarConteudo,
+ import {indexar, resumir, compararGondola, produtoPorGtin, produtosDosVinculos, reais,
   type Snapshot, type Resumo, type Vinculo, type ProdutoInfo} from './precos.ts'
- import {buscarCandidatos, rotuloVinculo, mesmoVinculo} from './vinculo.ts'
- import {importarLista2601} from './semente.ts'
+ import {buscarCandidatos, rotuloVinculo, mesmoVinculo, vinculosAutomaticos} from './vinculo.ts'
+ import {importarPlanilha, TAMANHO_PLANILHA} from './semente.ts'
  import {baixarSnapshot, ErroSincronizacao, validarSnapshot} from './sincronizar.ts'
  import {ler, gravar, pedirPersistencia} from './armazenamento.ts'
  import {rotulo, UNIDADES, type Unidade} from './unidades.ts'
  import {copiarTexto} from '../clipboard'
 
+ type Tela = 'montar' | 'comprar' | 'fechar' | 'catalogo' | 'lojas' | 'precos'
  const CHAVE_TOKEN = 'thb.compras.token'
  const CHAVE_JANELA = 'thb.compras.janela'
+ const CHAVE_SECAO = 'thb.compras.secao'
  const JANELAS = [{d: 30, r: '30 dias'}, {d: 90, r: '90 dias'}, {d: 180, r: '180 dias'}, {d: 0, r: 'Tudo'}]
 
  let estado = $state<EstadoCompras>(ESTADO_INICIAL)
  let snapshot = $state<Snapshot | undefined>(undefined)
  let carregado = $state(false)
  let emDisco = $state(true)
- let aba = $state<'semana' | 'itens' | 'listas' | 'precos'>('semana')
- let filtroLista = $state<string>('todas')
- let filtroStatus = $state<'todos' | Status>('todos')
+ let secao = $state<Secao>('producao')
+ let tela = $state<Tela>('montar')
  let busca = $state('')
+ let soEscolhidos = $state(false)
+ let filtroLista = $state('todas')
+ let filtroOrigem = $state('todas')
+ let filtroStatus = $state<'todos' | Status>('todos')
  let aberto = $state('')
  let destaque = $state('')
  let aviso = $state('')
  let copiado = $state('')
  let confirmar = $state('')
- // sincronização
  let token = $state('')
  let janela = $state(90)
  let sincronizando = $state(false)
  let erroSync = $state('')
  // editor de item
  let editId = $state<string | undefined>(undefined)
- let eNome = $state(''); let eGrupo = $state('Outros'); let eQtd = $state(''); let eUnid = $state<Unidade>('un')
- let eVinculos = $state<Vinculo[]>([]); let eQuant = $state<Record<string, string>>({}); let eBusca = $state('')
- // adicionar à lista
- let addBusca = $state(''); let addLista = $state(''); let addQtd = $state('')
+ let eNome = $state(''); let eUnidade = $state(''); let eGrupo = $state('Outros'); let eOrigem = $state('Mercado')
+ let eVinculos = $state<Vinculo[]>([]); let eBusca = $state(''); let eAuto = $state<boolean | undefined>(undefined)
+ // novo item rápido (montar)
+ let nNome = $state(''); let nUnidade = $state(''); let nGrupo = $state('Outros')
  // gôndola
  let gPreco = $state(''); let gQtd = $state(''); let gUnid = $state<Unidade>('un')
- // nova lista
- let novaListaNome = $state(''); let novaListaTipo = $state<Lista['tipo']>('loja')
- // leitura de EAN
+ // fechamento: quais não comprados vão para a próxima lista
+ let levar = $state<Record<string, boolean>>({})
+ // lojas
+ let novaListaNome = $state('')
+ // EAN
  let lendo = $state(false); let video = $state<HTMLVideoElement>(); let pararLeitura: (() => void) | undefined
  let lidoProduto = $state<ProdutoInfo | undefined>(undefined); let lidoCodigo = $state('')
  let arquivoBackup = $state<HTMLInputElement>()
 
  const indice = $derived(snapshot ? indexar(snapshot) : undefined)
- const listas = $derived([...estado.listas].sort((a, b) => a.ordem - b.ordem))
- const listaPorId = $derived(new Map(listas.map(l => [l.id, l])))
- const visiveis = $derived(filtroLista === 'todas' ? listas.map(l => l.id) : [filtroLista])
+ const lojas = $derived(listasDaSecao(estado, secao))
+ const listaPorId = $derived(new Map(estado.listas.map(l => [l.id, l])))
  const itemPorId = $derived(new Map(estado.itens.map(i => [i.id, i])))
+ const itensSecao = $derived(estado.itens.filter(i => i.secao === secao))
+ const entradas = $derived(entradasDaSecao(estado, secao))
+ const ciclo = $derived(estado.ciclos[secao])
+ const abertos = $derived(faltantesAbertos(estado, secao))
  const resumos = $derived.by(() => {
   const m = new Map<string, Resumo>()
   if (!indice) return m
   for (const i of estado.itens) {const r = resumir(indice, i.vinculos, janela); if (r) m.set(i.id, r)}
   return m
  })
- const contagem = $derived(metricas(estado, visiveis))
- /** Itens da semana agrupados, já filtrados por lista, status e busca. */
- const semana = $derived.by(() => {
-  const q = normalizar(busca)
-  const porItem = new Map<string, Entrada[]>()
-  for (const x of estado.entradas) if (visiveis.includes(x.listaId)) porItem.set(x.itemId, [...(porItem.get(x.itemId) ?? []), x])
-  const grupos = new Map<string, {item: Item, entradas: Entrada[]}[]>()
-  for (const [itemId, entradas] of porItem) {
-   const item = itemPorId.get(itemId)
-   if (!item) continue
-   if (filtroStatus !== 'todos' && !entradas.some(x => x.status === filtroStatus)) continue
-   if (q && !normalizar(item.nome).includes(q)) continue
-   const ord = entradas.sort((a, b) => (listaPorId.get(a.listaId)?.ordem ?? 0) - (listaPorId.get(b.listaId)?.ordem ?? 0))
-   grupos.set(item.grupo, [...(grupos.get(item.grupo) ?? []), {item, entradas: ord}])
-  }
-  return [...grupos.entries()].sort((a, b) => ordemGrupo(a[0]) - ordemGrupo(b[0]) || a[0].localeCompare(b[0]))
-   .map(([g, its]) => ({grupo: g, itens: its.sort((a, b) => a.item.nome.localeCompare(b.item.nome, 'pt-BR'))}))
+ const qtdPorItem = $derived.by(() => {
+  const m = new Map<string, Map<string, Entrada>>()
+  for (const x of entradas) {if (!m.has(x.itemId)) m.set(x.itemId, new Map()); m.get(x.itemId)!.set(x.listaId, x)}
+  return m
  })
- const totalVisivel = $derived(semana.reduce((s, g) => s + g.itens.length, 0))
- const catalogo = $derived([...estado.itens].sort((a, b) => ordemGrupo(a.grupo) - ordemGrupo(b.grupo) || a.grupo.localeCompare(b.grupo) || a.nome.localeCompare(b.nome, 'pt-BR')))
- const semVinculo = $derived(estado.itens.filter(i => !i.vinculos.length).length)
- const semHistorico = $derived(indice ? estado.itens.filter(i => i.vinculos.length && !resumos.has(i.id)).length : 0)
- const periodo = $derived(snapshot?.obs.length ? `${dataCurta(snapshot.obs[0][1], true)} a ${dataCurta(snapshot.obs.at(-1)![1], true)}` : '')
+ const escolhidos = $derived(qtdPorItem.size)
+ /** Grupos do catálogo da seção (tela Montar). */
+ const montagem = $derived.by(() => {
+  const q = normalizar(busca)
+  const lista = itensSecao.filter(i => (!q || normalizar(i.nome).includes(q)) && (!soEscolhidos || qtdPorItem.has(i.id)))
+  return agrupar(lista)
+ })
+ const lojasVisiveis = $derived(filtroLista === 'todas' ? lojas.map(l => l.id) : [filtroLista])
+ const entradasVisiveis = $derived(entradas.filter(x => lojasVisiveis.includes(x.listaId)))
+ const contagem = $derived(contar(entradasVisiveis))
+ const origens = $derived([...new Set(entradas.map(x => itemPorId.get(x.itemId)?.origem ?? 'Mercado'))].sort())
+ /** Grupos da lista da semana (tela Comprar). */
+ const compra = $derived.by(() => {
+  const q = normalizar(busca)
+  const ids = [...new Set(entradasVisiveis.map(x => x.itemId))]
+  const lista = ids.map(id => itemPorId.get(id)!).filter(i => i
+   && (!q || normalizar(i.nome).includes(q))
+   && (filtroOrigem === 'todas' || i.origem === filtroOrigem)
+   && (filtroStatus === 'todos' || entradasVisiveis.some(x => x.itemId === i.id && x.status === filtroStatus)))
+  return agrupar(lista)
+ })
+ const naoComprados = $derived(entradas.filter(x => x.status !== 'comprado'))
+ const levarLista = $derived(naoComprados.filter(x => levar[chave(x)] !== false).map(x => ({itemId: x.itemId, listaId: x.listaId})))
+ const semVinculo = $derived(itensSecao.filter(i => !i.vinculos.length).length)
+ const autoPendentes = $derived(itensSecao.filter(i => i.vinculoAuto).length)
+ const catalogo = $derived(agrupar(itensSecao.filter(i => !busca || normalizar(i.nome).includes(normalizar(busca)))))
  const candidatosEditor = $derived(indice && editId !== undefined ? buscarCandidatos(indice, eBusca || eNome).filter(c => !eVinculos.some(v => mesmoVinculo(v, c.vinculo))) : [])
  const resumoEditor = $derived(indice && editId !== undefined && eVinculos.length ? resumir(indice, eVinculos, janela) : undefined)
- const resultadosAdd = $derived.by(() => {
-  const q = normalizar(addBusca)
-  if (!q) return []
-  return estado.itens.filter(i => normalizar(i.nome).includes(q)).slice(0, 6)
- })
+ const periodo = $derived(snapshot?.obs.length ? `${dataCurta(snapshot.obs[0][1], true)} a ${dataCurta(snapshot.obs.at(-1)![1], true)}` : '')
+
+ function agrupar(lista: Item[]) {
+  const g = new Map<string, Item[]>()
+  for (const i of lista) g.set(i.grupo, [...(g.get(i.grupo) ?? []), i])
+  return [...g.entries()].sort((a, b) => ordemGrupo(secao, a[0]) - ordemGrupo(secao, b[0]) || a[0].localeCompare(b[0]))
+   .map(([grupo, itens]) => ({grupo, itens: itens.sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR') || a.unidade.localeCompare(b.unidade))}))
+ }
+ function chave(x: {itemId: string, listaId: string}) {return `${x.itemId}|${x.listaId}`}
 
  onMount(async () => {
-  try {token = localStorage.getItem(CHAVE_TOKEN) ?? ''; const salvo = localStorage.getItem(CHAVE_JANELA); const j = Number(salvo); if (salvo !== null && JANELAS.some(x => x.d === j)) janela = j} catch {/* sem localStorage */}
+  try {
+   token = localStorage.getItem(CHAVE_TOKEN) ?? ''
+   const salvo = localStorage.getItem(CHAVE_JANELA); const j = Number(salvo)
+   if (salvo !== null && JANELAS.some(x => x.d === j)) janela = j
+   const s = localStorage.getItem(CHAVE_SECAO); if (s === 'producao' || s === 'bebidas') secao = s
+  } catch {/* sem localStorage */}
   const [bruto, snap] = await Promise.all([ler<unknown>('estado'), ler<unknown>('snapshot')])
   estado = revisar(bruto)
   if (validarSnapshot(snap)) snapshot = snap
+  tela = estado.ciclos[secao].etapa
   carregado = true
   void pedirPersistencia()
   if (token && (!snapshot || Date.now() - Date.parse(snapshot.geradoEm) > 6 * 3600e3)) void sincronizar(true)
  })
  onDestroy(pararCamera)
 
- // Grava a cada mudança (o IndexedDB clona estruturalmente; o proxy do $state não é clonável).
  $effect(() => {
   const copia = $state.snapshot(estado)
   if (!carregado) return
   void gravar('estado', copia).then(ok => {emDisco = ok})
  })
 
- /** Baixa os preços do Supabase e grava no aparelho. */
+ // ---------- utilidades ----------
+ function avisar(t: string) {aviso = t; setTimeout(() => {if (aviso === t) aviso = ''}, 2600)}
+ function confirmarDuasVezes(k: string, acao: () => void) {
+  if (confirmar !== k) {confirmar = k; setTimeout(() => {if (confirmar === k) confirmar = ''}, 3000); return}
+  confirmar = ''; acao()
+ }
+ function dataCurta(iso: string, ano = false) {const [y, m, d] = iso.split('-'); return ano ? `${d}/${m}/${y.slice(2)}` : `${d}/${m}`}
+ function porUnid(r: Resumo) {return `/${rotulo(r.unidade)}`}
+ function vibrar(p: number | number[]) {try {navigator.vibrate?.(p)} catch {/* sem haptics */}}
+ function hoje() {return new Date().toLocaleDateString('pt-BR')}
+ function num(t: string) {const n = Number(t.trim().replace(/\./g, '').replace(',', '.')); return Number.isFinite(n) ? n : NaN}
+ function numDec(t: string) {const n = Number(t.trim().replace(',', '.')); return Number.isFinite(n) ? n : NaN}
+ function pct(v?: number) {return v == null ? '' : `${v > 0 ? '+' : ''}${(v * 100).toFixed(0)}%`}
+ function trocarSecao(s: Secao) {
+  secao = s; tela = estado.ciclos[s].etapa; busca = ''; filtroLista = 'todas'; filtroOrigem = 'todas'; filtroStatus = 'todos'; aberto = ''; editId = undefined
+  try {localStorage.setItem(CHAVE_SECAO, s)} catch {/* não persiste */}
+ }
+ function irTela(t: Tela) {tela = t; busca = ''; editId = undefined; aberto = ''; if (t === 'fechar') levar = {}; window.scrollTo({top: 0})}
+
+ // ---------- sincronização ----------
  async function sincronizar(silencioso = false) {
-  if (!token.trim()) {erroSync = 'Informe o token de sincronização.'; aba = 'precos'; return}
+  if (!token.trim()) {erroSync = 'Informe o token de sincronização.'; irTela('precos'); return}
   sincronizando = true; erroSync = ''
   try {
    const s = await baixarSnapshot(token)
    snapshot = s
    await gravar('snapshot', s)
    try {localStorage.setItem(CHAVE_TOKEN, token.trim())} catch {/* não persiste */}
-   if (!silencioso) avisar(`Preços atualizados: ${s.obs.length} compras.`)
+   const novos = vinculosAutomaticos(indexar(s), estado.itens)
+   for (const n of novos) estado = atualizarItem(estado, n.itemId, {vinculos: [n.vinculo], vinculoAuto: true})
+   if (!silencioso || novos.length) avisar(`Preços atualizados: ${s.obs.length} compras${novos.length ? ` · ${novos.length} vínculos sugeridos` : ''}.`)
   } catch (e) {
    const msg = e instanceof ErroSincronizacao ? e.message : 'Falha ao sincronizar.'
    if (!silencioso || (e instanceof ErroSincronizacao && e.tipo === 'token')) erroSync = msg
   } finally {sincronizando = false}
  }
-
  function escolherJanela(d: number) {janela = d; try {localStorage.setItem(CHAVE_JANELA, String(d))} catch {/* não persiste */}}
- function avisar(t: string) {aviso = t; setTimeout(() => {if (aviso === t) aviso = ''}, 2600)}
- function confirmarDuasVezes(chave: string, acao: () => void) {
-  if (confirmar !== chave) {confirmar = chave; setTimeout(() => {if (confirmar === chave) confirmar = ''}, 3000); return}
-  confirmar = ''; acao()
- }
- function dataCurta(iso: string, ano = false) {const [y, m, d] = iso.split('-'); return ano ? `${d}/${m}/${y.slice(2)}` : `${d}/${m}`}
- function porUnid(r: Resumo) {return `/${rotulo(r.unidade)}`}
- function vibrar(p: number | number[]) {try {navigator.vibrate?.(p)} catch {/* sem haptics */}}
 
- // ---------- semana ----------
+ // ---------- montar ----------
+ function ativar(item: Item, l: Lista) {
+  estado = definirQuantidade(estado, l.id, item.id, item.ultimaQtd[l.id] || '1')
+  vibrar(15)
+  void tick().then(() => (document.getElementById(`q-${item.id}-${l.id}`) as HTMLInputElement | null)?.select())
+ }
+ function mudarQtd(item: Item, l: Lista, v: string) {estado = definirQuantidade(estado, l.id, item.id, v)}
+ function criarNovo() {
+  const nome = nNome.trim()
+  if (!nome) return
+  const r = criarItem(estado, {nome, unidade: nUnidade, secao, grupo: nGrupo})
+  estado = r.estado
+  if (lojas.length === 1) estado = definirQuantidade(estado, lojas[0].id, r.item.id, '1')
+  nNome = ''; nUnidade = ''; destacar(r.item.id)
+  avisar('Item criado. Ele ganha preço quando aparecer numa NF-e sincronizada.')
+ }
+ function incluirTodosFaltantes() {estado = incluirFaltantes(estado, abertos); vibrar(30)}
+ function irComprar() {
+  if (!escolhidos) {avisar('Escolha pelo menos um item.'); return}
+  estado = irPara(estado, secao, 'comprar', hoje()); irTela('comprar')
+ }
+ function destacar(id: string) {destaque = id; setTimeout(() => {if (destaque === id) destaque = ''}, 1600)}
+
+ // ---------- comprar ----------
  function tocar(listaId: string, itemId: string, s: Exclude<Status, 'pendente'>) {estado = alternarStatus(estado, listaId, itemId, s); vibrar(s === 'comprado' ? 30 : [20, 40, 20])}
- function tocarTudo(itemId: string, entradas: Entrada[], s: Exclude<Status, 'pendente'>) {
-  const todos = entradas.every(x => x.status === s)
-  estado = marcarItem(estado, itemId, entradas.map(x => x.listaId), todos ? 'pendente' : s); vibrar(30)
+ function tocarTudo(itemId: string, es: Entrada[], s: Exclude<Status, 'pendente'>) {
+  estado = marcarItem(estado, itemId, es.every(x => x.status === s) ? 'pendente' : s); vibrar(30)
  }
  function abrir(item: Item) {
   if (aberto === item.id) {aberto = ''; return}
   aberto = item.id
   const p = estado.pesquisa[item.id]
-  const ultima = resumos.get(item.id)?.ultima
   gPreco = p ? String(p.preco).replace('.', ',') : ''
-  if (p) {gQtd = String(p.qtd).replace('.', ','); gUnid = p.unidade}
-  else if (item.embalagem) {gQtd = String(item.embalagem.qtd).replace('.', ','); gUnid = item.embalagem.unidade}
-  else {gQtd = '1'; gUnid = resumos.get(item.id)?.unidade ?? 'un'}
-  void ultima
+  const emb = p ? {qtd: p.qtd, unidade: p.unidade} : item.embalagem
+  gQtd = emb ? String(emb.qtd).replace('.', ',') : '1'
+  gUnid = emb?.unidade ?? resumos.get(item.id)?.unidade ?? 'un'
  }
- function num(t: string): number {const n = Number(t.trim().replace(/\./g, '').replace(',', '.')); return Number.isFinite(n) ? n : NaN}
- function numDecimal(t: string): number {const n = Number(t.trim().replace(',', '.')); return Number.isFinite(n) ? n : NaN}
  function salvarGondola(item: Item) {
-  const preco = num(gPreco), qtd = numDecimal(gQtd)
+  const preco = num(gPreco), qtd = numDec(gQtd)
   estado = registrarPesquisa(estado, item.id, preco > 0 && qtd > 0 ? {preco, qtd, unidade: gUnid, em: Date.now()} : undefined)
  }
  function comparacao(item: Item) {
   const p = estado.pesquisa[item.id], r = resumos.get(item.id)
   return p && r ? compararGondola(r, p.preco, p.qtd, p.unidade) : undefined
  }
- function pct(v?: number) {return v == null ? '' : `${v > 0 ? '+' : ''}${(v * 100).toFixed(0)}%`}
- async function copiarRelatorio(modo: ModoRelatorio) {
-  const titulo = `THB – COMPRAS ${estado.rodadaNome || new Date().toLocaleDateString('pt-BR')}`
-  const txt = relatorio(estado, visiveis, modo, titulo)
-  if (await copiarTexto(txt)) {copiado = modo; vibrar(40); setTimeout(() => {if (copiado === modo) copiado = ''}, 1800)}
+ async function copiar(id: string, texto: string) {
+  if (await copiarTexto(texto)) {copiado = id; vibrar(40); setTimeout(() => {if (copiado === id) copiado = ''}, 1800)}
  }
- function iniciarRodada(manter: boolean) {
-  const nome = new Date().toLocaleDateString('pt-BR')
-  confirmarDuasVezes(manter ? 'rodada' : 'rodada-zero', () => {estado = novaRodada(estado, manter, nome); aberto = ''; avisar(`Nova semana: ${nome}`)})
- }
- function adicionarNaLista(item: Item) {
-  const listaId = filtroLista !== 'todas' ? filtroLista : (addLista || listas[0]?.id)
-  if (!listaId) {avisar('Crie uma lista primeiro.'); aba = 'listas'; return}
-  estado = definirQuantidade(estado, listaId, item.id, addQtd.trim() || '01')
-  addBusca = ''; addQtd = ''; destacar(item.id)
- }
- function criarEAdicionar() {
-  const nome = addBusca.trim()
-  if (!nome) return
-  const r = criarItem(estado, {nome, grupo: 'Outros', vinculos: indice ? sugestaoAutomatica(nome) : []})
-  estado = r.estado
-  adicionarNaLista(r.item)
- }
- /** Primeiro candidato com boa pontuação vira vínculo inicial; o usuário confere no editor. */
- function sugestaoAutomatica(nome: string): Vinculo[] {
-  const c = indice ? buscarCandidatos(indice, nome, 1)[0] : undefined
-  return c && c.pontos >= 1 ? [c.vinculo] : []
- }
- function destacar(id: string) {destaque = id; setTimeout(() => {if (destaque === id) destaque = ''}, 1600)}
+ function copiarRelatorio(modo: ModoRelatorio) {void copiar(modo, relatorio(estado, secao, modo))}
 
- // ---------- editor ----------
- function editar(item?: Item, nomeInicial = '') {
+ // ---------- fechar ----------
+ function encerrar() {
+  confirmarDuasVezes('encerrar', () => {
+   const n = levarLista.length
+   estado = fecharCompra(estado, secao, levarLista)
+   irTela('montar')
+   avisar(n ? `Compra encerrada. ${n} ${n === 1 ? 'item ficou' : 'itens ficaram'} para a próxima lista.` : 'Compra encerrada.')
+  })
+ }
+
+ // ---------- catálogo ----------
+ function editar(item?: Item) {
   editId = item?.id ?? ''
-  eNome = item?.nome ?? nomeInicial; eGrupo = item?.grupo ?? 'Outros'
-  eQtd = item?.embalagem ? String(item.embalagem.qtd).replace('.', ',') : ''; eUnid = item?.embalagem?.unidade ?? 'un'
-  eVinculos = item ? [...item.vinculos] : []; eBusca = ''
-  eQuant = Object.fromEntries(listas.map(l => [l.id, item ? estado.entradas.find(x => x.itemId === item.id && x.listaId === l.id)?.quantidade ?? '' : '']))
-  if (aba !== 'itens') aba = 'itens'
+  eNome = item?.nome ?? ''; eUnidade = item?.unidade ?? ''; eGrupo = item?.grupo ?? GRUPOS[secao][0]; eOrigem = item?.origem ?? 'Mercado'
+  eVinculos = item ? [...item.vinculos] : []; eBusca = ''; eAuto = item?.vinculoAuto
+  if (tela !== 'catalogo') tela = 'catalogo'
   void tick().then(() => document.getElementById('editor-item')?.scrollIntoView({behavior: 'smooth', block: 'start'}))
  }
  function salvarItem() {
   const nome = eNome.trim()
   if (!nome) {avisar('Dê um nome ao item.'); return}
-  const q = numDecimal(eQtd)
-  const embalagem = q > 0 ? {qtd: q, unidade: eUnid} : undefined
+  const vinculos = $state.snapshot(eVinculos)
+  // vínculo automático confirmado ao salvar; vínculos apagados à mão não voltam sozinhos
+  const vinculoAuto = vinculos.length ? undefined : (eAuto !== undefined ? false : undefined)
+  const campos = {nome, unidade: eUnidade.trim(), grupo: eGrupo, origem: eOrigem, embalagem: embalagemDaUnidade(eUnidade), vinculos, vinculoAuto}
   let id = editId
-  if (id) estado = atualizarItem(estado, id, {nome, grupo: eGrupo, embalagem, vinculos: $state.snapshot(eVinculos)})
-  else {const r = criarItem(estado, {nome, grupo: eGrupo, embalagem, vinculos: $state.snapshot(eVinculos)}); estado = r.estado; id = r.item.id}
-  for (const l of listas) estado = definirQuantidade(estado, l.id, id!, eQuant[l.id] ?? '')
+  if (id) estado = atualizarItem(estado, id, campos)
+  else {const r = criarItem(estado, {...campos, secao}); estado = r.estado; id = r.item.id}
   editId = undefined; destacar(id!); avisar('Item salvo.')
  }
+ function confirmarAuto(item: Item) {estado = atualizarItem(estado, item.id, {vinculoAuto: undefined}); vibrar(20)}
  function excluirItem() {
   const id = editId
   if (!id) {editId = undefined; return}
   confirmarDuasVezes('excluir-item', () => {estado = removerItem(estado, id); editId = undefined; avisar('Item excluído.')})
  }
 
- // ---------- listas ----------
- function novaLista() {const r = criarLista(estado, novaListaNome, novaListaTipo); estado = r.estado; novaListaNome = ''; avisar(`Lista ${r.lista.nome} criada.`)}
- function moverLista(l: Lista, d: -1 | 1) {
-  const i = listas.findIndex(x => x.id === l.id), j = i + d
-  if (j < 0 || j >= listas.length) return
-  const outra = listas[j]
-  estado = atualizarLista(atualizarLista(estado, l.id, {ordem: outra.ordem}), outra.id, {ordem: l.ordem})
+ // ---------- lojas ----------
+ function novaLista() {const r = criarLista(estado, novaListaNome, 'pessoal', [secao]); estado = r.estado; novaListaNome = ''; avisar(`Lista ${r.lista.nome} criada.`)}
+ function alternarSecaoLista(l: Lista, s: Secao) {
+  const secoes = l.secoes.includes(s) ? l.secoes.filter(x => x !== s) : [...l.secoes, s]
+  estado = atualizarLista(estado, l.id, {secoes})
  }
- function importar2601() {estado = importarLista2601(estado); avisar('Lista de 26/01 importada (Freguesia e Tijuca).'); aba = 'semana'}
+ function moverLista(l: Lista, d: -1 | 1) {
+  const ord = [...estado.listas].sort((a, b) => a.ordem - b.ordem)
+  const i = ord.findIndex(x => x.id === l.id), j = i + d
+  if (j < 0 || j >= ord.length) return
+  estado = atualizarLista(atualizarLista(estado, l.id, {ordem: ord[j].ordem}), ord[j].id, {ordem: l.ordem})
+ }
+ function importar() {estado = importarPlanilha(estado); avisar('Modelo da planilha carregado.'); irTela('montar')}
  function baixarBackup() {
   const blob = new Blob([JSON.stringify($state.snapshot(estado), null, 1)], {type: 'application/json'})
   const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `thb-compras-${new Date().toISOString().slice(0, 10)}.json`
@@ -240,63 +287,60 @@
   try {
    const e = revisar(JSON.parse(await f.text()))
    if (!e.listas.length && !e.itens.length) throw new Error()
-   estado = e; avisar(`Backup restaurado: ${e.listas.length} listas, ${e.itens.length} itens.`)
+   estado = e; tela = e.ciclos[secao].etapa; avisar(`Backup restaurado: ${e.listas.length} listas, ${e.itens.length} itens.`)
   } catch {avisar('Arquivo de backup inválido.')}
  }
 
- // ---------- leitura de EAN ----------
+ // ---------- EAN ----------
  async function lerCodigo() {
   lidoProduto = undefined; lidoCodigo = ''; lendo = true
   try {
    const [{iniciarLeitura}, {readerOptionsProduto, criarConfirmador}] = await Promise.all([import('../camera-scanner'), import('../scanner')])
    await tick()
    const confirma = criarConfirmador(2)
-   const r = await iniciarLeitura(video!, texto => {
-    if (!confirma(texto)) return
-    pararCamera(); tratarCodigo(texto)
-   }, {opcoes: readerOptionsProduto()})
+   const r = await iniciarLeitura(video!, texto => {if (confirma(texto)) {pararCamera(); tratarCodigo(texto)}}, {opcoes: readerOptionsProduto()})
    if (!lendo) r.parar(); else pararLeitura = r.parar
   } catch {pararCamera(); avisar('Não foi possível abrir a câmera.')}
  }
  function pararCamera() {pararLeitura?.(); pararLeitura = undefined; lendo = false}
+ function itemDoProduto(p: ProdutoInfo) {return itensSecao.find(i => indice && produtosDosVinculos(indice, i.vinculos).has(p.chave))}
  function tratarCodigo(codigo: string) {
   vibrar(60); lidoCodigo = codigo
   const p = indice ? produtoPorGtin(indice, codigo) : undefined
   lidoProduto = p
-  if (!p) return
-  const item = estado.itens.find(i => indice && produtosDosVinculos(indice, i.vinculos).has(p.chave))
-  if (item && estado.entradas.some(x => x.itemId === item.id && visiveis.includes(x.listaId))) {
-   busca = ''; filtroStatus = 'todos'; aberto = ''; abrir(item); destacar(item.id); lidoProduto = undefined
+  const item = p && itemDoProduto(p)
+  if (item && qtdPorItem.has(item.id)) {
+   busca = ''; filtroStatus = 'todos'; filtroOrigem = 'todas'; aberto = ''; abrir(item); destacar(item.id); lidoProduto = undefined; lidoCodigo = ''
    void tick().then(() => document.getElementById(`item-${item.id}`)?.scrollIntoView({behavior: 'smooth', block: 'center'}))
   }
  }
- function vinculoDoProduto(p: ProdutoInfo): Vinculo {return p.insumo != null ? {tipo: 'insumo', id: p.insumo} : {tipo: 'produto', chave: p.chave}}
- function itemDoProduto(p: ProdutoInfo): Item | undefined {return estado.itens.find(i => indice && produtosDosVinculos(indice, i.vinculos).has(p.chave))}
- function adicionarProdutoLido(p: ProdutoInfo) {
+ function incluirLido(p: ProdutoInfo, l: Lista) {
   let item = itemDoProduto(p)
   if (!item) {
-   const nome = p.insumo != null ? (indice?.insumos.get(p.insumo)?.descricao ?? p.descricao) : p.descricao
-   const emb = p.embalagens ? Object.values(p.embalagens)[0] : undefined
-   const r = criarItem(estado, {nome, grupo: 'Outros', vinculos: [vinculoDoProduto(p)], embalagem: emb ? {qtd: emb[0], unidade: emb[1]} : undefined})
+   const r = criarItem(estado, {nome: p.insumo != null ? (indice?.insumos.get(p.insumo)?.descricao ?? p.descricao) : p.descricao, secao, grupo: 'Outros',
+    vinculos: [p.insumo != null ? {tipo: 'insumo', id: p.insumo} : {tipo: 'produto', chave: p.chave}]})
    estado = r.estado; item = r.item
   }
-  adicionarNaLista(item); lidoProduto = undefined; lidoCodigo = ''
+  estado = definirQuantidade(estado, l.id, item.id, item.ultimaQtd[l.id] || '1')
+  lidoProduto = undefined; lidoCodigo = ''; destacar(item.id)
  }
 </script>
 
-{#snippet precos(item: Item, r: Resumo | undefined, compacto: boolean)}
+{#snippet unid(item: Item)}{#if item.unidade}<span class="un">{item.unidade}</span>{/if}{#if item.origem !== 'Mercado'}<span class="orig">{item.origem}</span>{/if}{/snippet}
+
+{#snippet precos(item: Item, r: Resumo | undefined)}
  {#if r}
   {@const c = comparacao(item)}
-  <div class="precos" class:compacto>
+  <div class="precos">
    <div class="caixa">
     <span class="rot">Último · {dataCurta(r.ultima!.data)}</span>
     <strong>{reais(r.ultima!.precoUnit)}<small>{porUnid(r)}</small></strong>
-    <span class="det">{r.ultima!.fornecedor}{#if r.ultima!.embalagem && r.ultima!.embalagem !== `1 ${r.unidade}`} · {reais(r.ultima!.precoEmbalagem)} por {r.ultima!.embalagem}{/if}</span>
+    <span class="det">{r.ultima!.fornecedor}{#if r.ultima!.embalagem && r.ultima!.embalagem !== `1 ${r.unidade}`}{' · '}{reais(r.ultima!.precoEmbalagem)} por {r.ultima!.embalagem}{/if}</span>
    </div>
    <div class="caixa media">
     <span class="rot">Média {r.mediaHistorico || r.janelaDias === 0 ? 'histórico' : `${r.janelaDias}d`}</span>
     <strong>{r.media ? reais(r.media) : '—'}<small>{porUnid(r)}</small></strong>
-    <span class="det">{r.min != null && r.max != null && r.max - r.min > 0.005 ? `${reais(r.min)} – ${reais(r.max)}` : 'estável'} · {r.compras.length} {r.compras.length === 1 ? 'compra' : 'compras'}</span>
+    <span class="det">{r.min != null && r.max != null && r.max - r.min > 0.005 ? `${reais(r.min)} – ${reais(r.max)}` : 'estável'} · {r.compras.length} NF</span>
    </div>
    {#if r.compras.length > 1}
     {@const serie = r.compras.slice(-12).map(x => x.precoUnit)}
@@ -308,257 +352,359 @@
  {:else if item.vinculos.length}
   <p class="sem-hist">{indice ? 'Sem compra com NF-e para este vínculo.' : 'Sincronize os preços para ver o histórico.'}</p>
  {:else}
-  <p class="sem-hist">Sem vínculo com compras · <button class="link" onclick={() => editar(item)}>vincular</button></p>
+  <p class="sem-hist">Sem histórico: ganha preço quando aparecer numa NF-e.</p>
  {/if}
 {/snippet}
 
 <section class="compras">
- <div class="topo">
-  <div><p class="eyebrow">COMPRAS DA SEMANA{#if estado.rodadaNome}{' · '}{estado.rodadaNome}{/if}</p>
-   <h1>Lista e preço lado a lado.</h1></div>
-  <button class="sync" class:girando={sincronizando} onclick={() => sincronizar()} disabled={sincronizando} title="Sincronizar preços">{sincronizando ? '⟳' : '⟳'}<span>{snapshot ? `preços de ${dataCurta(snapshot.geradoEm.slice(0, 10))}` : 'sem preços'}</span></button>
+ <div class="cabeca">
+  <div class="secoes" role="tablist" aria-label="Seção de compras">
+   {#each SECOES as s (s.id)}
+    {@const n = entradasDaSecao(estado, s.id).length}
+    <button role="tab" aria-selected={secao === s.id} class:on={secao === s.id} onclick={() => trocarSecao(s.id)}>{s.emoji} {s.nome}{#if n}<i>{n}</i>{/if}</button>
+   {/each}
+  </div>
+  <button class="sync" class:girando={sincronizando} onclick={() => sincronizar()} disabled={sincronizando} aria-label="Sincronizar preços">⟳<span>{snapshot ? dataCurta(snapshot.geradoEm.slice(0, 10)) : 'preços'}</span></button>
  </div>
- <nav class="abas" aria-label="Seções de compras">
-  {#each [['semana', 'Semana'], ['itens', 'Itens'], ['listas', 'Listas'], ['precos', 'Preços']] as [id, r] (id)}
-   <button class:on={aba === id} onclick={() => {aba = id as typeof aba; editId = undefined}}>{r}{#if id === 'itens' && semVinculo}<i>{semVinculo}</i>{/if}</button>
-  {/each}
+
+ <nav class="passos" aria-label="Etapas">
+  <button class:on={tela === 'montar'} onclick={() => irTela('montar')}><b>1</b>Montar{#if escolhidos}<small>{escolhidos}</small>{/if}</button>
+  <button class:on={tela === 'comprar'} disabled={!escolhidos} onclick={() => irTela('comprar')}><b>2</b>Comprar{#if escolhidos}<small>{contar(entradas).comprado}/{entradas.length}</small>{/if}</button>
+  <button class:on={tela === 'fechar'} disabled={!escolhidos} onclick={() => irTela('fechar')}><b>3</b>Fechar</button>
+  <button class="mais" class:on={tela === 'catalogo' || tela === 'lojas' || tela === 'precos'} onclick={() => irTela(tela === 'catalogo' ? 'lojas' : tela === 'lojas' ? 'precos' : 'catalogo')} aria-label="Catálogo, lojas e preços">⚙︎{#if autoPendentes}<i>{autoPendentes}</i>{/if}</button>
  </nav>
- {#if !emDisco}<p class="alerta">Este navegador não está guardando os dados (aba privada?). Baixe um backup em Listas.</p>{/if}
+ {#if tela === 'catalogo' || tela === 'lojas' || tela === 'precos'}
+  <nav class="sub" aria-label="Configuração">
+   <button class:on={tela === 'catalogo'} onclick={() => irTela('catalogo')}>Catálogo</button>
+   <button class:on={tela === 'lojas'} onclick={() => irTela('lojas')}>Lojas e histórico</button>
+   <button class:on={tela === 'precos'} onclick={() => irTela('precos')}>Preços</button>
+  </nav>
+ {/if}
+ {#if !emDisco}<p class="alerta">Este navegador não está guardando os dados (aba privada?). Baixe um backup em Lojas.</p>{/if}
  {#if erroSync}<p class="alerta">{erroSync}</p>{/if}
 
- {#if aba === 'semana'}
-  {#if !listas.length}
-   <div class="vazio"><p>Nenhuma lista ainda.</p><button class="primary" onclick={importar2601}>Importar a lista de 26/01 (Freguesia + Tijuca)</button><button class="secondary" onclick={() => aba = 'listas'}>Criar lista do zero</button></div>
-  {:else}
-   <div class="metricas">
-    {#each [['comprado', 'Comprados', '✓'], ['indisponivel', 'Não tem', '✕'], ['pendente', 'Pendentes', '◷']] as [s, r, ic] (s)}
-     <button class="metrica m-{s}" class:on={filtroStatus === s} onclick={() => filtroStatus = filtroStatus === s ? 'todos' : s as Status}><strong>{contagem[s as Status]}</strong><span>{ic} {r}</span></button>
-    {/each}
-   </div>
-   <div class="filtro-listas" role="tablist">
-    <button role="tab" aria-selected={filtroLista === 'todas'} class:on={filtroLista === 'todas'} onclick={() => filtroLista = 'todas'}>Todas</button>
-    {#each listas as l (l.id)}<button role="tab" aria-selected={filtroLista === l.id} class:on={filtroLista === l.id} style="--cor:{l.cor}" onclick={() => filtroLista = l.id}><b class="sigla">{l.sigla}</b>{l.nome}</button>{/each}
-   </div>
-   <div class="busca">
-    <input type="search" bind:value={busca} placeholder="Buscar na lista…" aria-label="Buscar item na lista"/>
-    <button class="ean" onclick={lendo ? pararCamera : lerCodigo} aria-label="Ler código de barras do produto">{lendo ? '✕' : '▥'}<span>{lendo ? 'Fechar' : 'Ler EAN'}</span></button>
-   </div>
-   {#if lendo}<div class="camera"><video bind:this={video} autoplay muted playsinline aria-label="Câmera lendo código de barras"></video><span class="mira" aria-hidden="true"></span></div>{/if}
-   {#if lidoCodigo && !lendo}
-    <div class="lido">
-     {#if lidoProduto}
-      {@const r = indice ? resumir(indice, [vinculoDoProduto(lidoProduto)], janela) : undefined}
-      {@const ja = itemDoProduto(lidoProduto)}
-      <p class="eyebrow">EAN {lidoCodigo} · {lidoProduto.fornecedor}</p>
-      <h3>{lidoProduto.descricao}</h3>
-      {#if r}
-       <div class="precos"><div class="caixa"><span class="rot">Último · {dataCurta(r.ultima!.data)}</span><strong>{reais(r.ultima!.precoUnit)}<small>/{rotulo(r.unidade)}</small></strong></div><div class="caixa media"><span class="rot">Média</span><strong>{r.media ? reais(r.media) : '—'}<small>/{rotulo(r.unidade)}</small></strong></div></div>
-      {/if}
-      <p class="small">{ja ? `É o item "${ja.nome}", que não está ${filtroLista === 'todas' ? 'nas listas' : 'nesta lista'}.` : 'Não está no seu catálogo.'}</p>
-      <div class="linha-acoes">{#if filtroLista === 'todas' && listas.length > 1}<select bind:value={addLista} aria-label="Lista">{#each listas as l (l.id)}<option value={l.id}>{l.nome}</option>{/each}</select>{/if}<input class="qtd" bind:value={addQtd} placeholder="qtd" aria-label="Quantidade"/><button class="primary" onclick={() => adicionarProdutoLido(lidoProduto!)}>Pôr na lista</button></div>
-     {:else}
-      <p class="small">EAN {lidoCodigo} não aparece em nenhuma NF-e sincronizada.</p>
-     {/if}
-     <button class="link" onclick={() => {lidoCodigo = ''; lidoProduto = undefined}}>fechar</button>
-    </div>
-   {/if}
+ {#if !estado.itens.length && tela !== 'precos' && tela !== 'lojas'}
+  <div class="vazio">
+   <h2>Comece pelo modelo da planilha</h2>
+   <p class="small">Carrega os {TAMANHO_PLANILHA.producao} itens de produção e os {TAMANHO_PLANILHA.bebidas} de bebidas e salão, com a unidade de cada um e as lojas Tijuca e Freguesia. Nada fica marcado: você escolhe o que vai comprar.</p>
+   <button class="primary" onclick={importar}>Carregar modelo da planilha</button>
+   <button class="secondary" onclick={() => irTela('lojas')}>Restaurar backup</button>
+  </div>
 
-   <p class="contador">{totalVisivel} {totalVisivel === 1 ? 'item' : 'itens'}{#if filtroStatus !== 'todos' || busca} · <button class="link" onclick={() => {filtroStatus = 'todos'; busca = ''}}>mostrar todos</button>{/if}</p>
-
-   {#each semana as g (g.grupo)}
-    <h2 class="grupo">{EMOJI_GRUPO[g.grupo] ?? '📌'} {g.grupo}</h2>
-    {#each g.itens as {item, entradas} (item.id)}
-     {@const r = resumos.get(item.id)}
-     {@const feito = entradas.every(x => x.status === 'comprado')}
-     {@const faltou = entradas.every(x => x.status === 'indisponivel')}
-     {@const c = comparacao(item)}
-     <article class="item" id="item-{item.id}" class:feito class:faltou class:destaque={destaque === item.id} class:aberto={aberto === item.id}>
-      <div class="cab">
-       <button class="nome" onclick={() => abrir(item)} aria-expanded={aberto === item.id}>
-        <span class="t">{item.nome}</span>
-        {#if filtroLista !== 'todas'}<span class="q">{entradas[0].quantidade}</span>{/if}
-        {#if c}<span class="selo v-{c.veredito}">{pct(c.vsMedia ?? c.vsUltima)}</span>{/if}
-       </button>
-       {#if filtroLista !== 'todas' || entradas.length === 1}
-        {@const x = entradas[0]}
-        <div class="acoes">
-         <button class="ac buy" class:on={x.status === 'comprado'} aria-pressed={x.status === 'comprado'} aria-label="Comprado: {item.nome}" onclick={() => tocar(x.listaId, item.id, 'comprado')}>✓</button>
-         <button class="ac miss" class:on={x.status === 'indisponivel'} aria-pressed={x.status === 'indisponivel'} aria-label="Não encontrado: {item.nome}" onclick={() => tocar(x.listaId, item.id, 'indisponivel')}>✕</button>
-        </div>
-       {:else}
-        <div class="acoes"><button class="ac buy" class:on={feito} aria-label="Comprado em todas as listas: {item.nome}" onclick={() => tocarTudo(item.id, entradas, 'comprado')}>✓✓</button></div>
-       {/if}
-      </div>
-      {#if filtroLista === 'todas' && (entradas.length > 1 || listas.length > 1)}
-       <div class="porlista">
-        {#each entradas as x (x.listaId)}{@const l = listaPorId.get(x.listaId)}
-         <div class="pl st-{x.status}" style="--cor:{l?.cor}">
-          <b class="sigla">{l?.sigla}</b><span class="q">{x.quantidade}</span>
-          {#if entradas.length > 1}
-           <button class="mini buy" class:on={x.status === 'comprado'} aria-label="Comprado em {l?.nome}" onclick={() => tocar(x.listaId, item.id, 'comprado')}>✓</button>
-           <button class="mini miss" class:on={x.status === 'indisponivel'} aria-label="Não encontrado em {l?.nome}" onclick={() => tocar(x.listaId, item.id, 'indisponivel')}>✕</button>
-          {:else}
-           <span class="estado">{x.status === 'comprado' ? 'comprado' : x.status === 'indisponivel' ? 'não tem' : ''}</span>
-          {/if}
-         </div>
-        {/each}
-       </div>
-      {/if}
-      {@render precos(item, r, true)}
-      {#if aberto === item.id}
-       <div class="detalhe">
-        <form class="gondola" onsubmit={(e) => {e.preventDefault(); salvarGondola(item)}}>
-         <label for="gp-{item.id}">Preço na gôndola</label>
-         <div class="linha-acoes">
-          <input id="gp-{item.id}" class="preco" bind:value={gPreco} inputmode="decimal" placeholder="R$ 0,00"/>
-          <span class="por">por</span>
-          <input class="qtd" bind:value={gQtd} inputmode="decimal" aria-label="Conteúdo da embalagem"/>
-          <select bind:value={gUnid} aria-label="Unidade">{#each UNIDADES as u (u)}<option value={u}>{rotulo(u)}</option>{/each}</select>
-          <button class="primary">Comparar</button>
-         </div>
-         {#if estado.pesquisa[item.id]}<button type="button" class="link" onclick={() => {estado = registrarPesquisa(estado, item.id); gPreco = ''}}>apagar preço da gôndola</button>{/if}
-        </form>
-        {#if r}
-         <table class="hist"><thead><tr><th>Data</th><th>Onde / produto</th><th>Emb.</th><th>{porUnid(r)}</th></tr></thead><tbody>
-          {#each r.compras.slice(-8).reverse() as cp (cp.data + cp.descricao + cp.total)}
-           <tr><td>{dataCurta(cp.data, true)}</td><td><b>{cp.fornecedor}</b> {cp.descricao}</td><td>{reais(cp.precoEmbalagem)}{#if cp.embalagem}<small class="emb">{cp.embalagem}</small>{/if}</td><td class="u">{reais(cp.precoUnit)}</td></tr>
-          {/each}
-         </tbody></table>
-         {#if r.unidadeDescricao}<p class="small">Preço por {r.unidadeDescricao}.</p>{/if}
-        {/if}
-        <button class="link" onclick={() => editar(item)}>editar item e vínculos</button>
-       </div>
-      {/if}
-     </article>
-    {/each}
-   {:else}
-    <p class="vazio-curto">Nada aqui com esse filtro.</p>
-   {/each}
-
-   <div class="adicionar">
-    <label for="add-busca">Adicionar à {filtroLista === 'todas' ? 'lista' : `lista ${listaPorId.get(filtroLista)?.nome}`}</label>
-    <div class="linha-acoes">
-     <input id="add-busca" bind:value={addBusca} placeholder="Nome do item"/>
-     {#if filtroLista === 'todas' && listas.length > 1}<select bind:value={addLista} aria-label="Lista">{#each listas as l (l.id)}<option value={l.id}>{l.nome}</option>{/each}</select>{/if}
-     <input class="qtd" bind:value={addQtd} placeholder="qtd" aria-label="Quantidade"/>
-    </div>
-    {#if addBusca.trim()}
-     <div class="resultados">
-      {#each resultadosAdd as i (i.id)}<button onclick={() => adicionarNaLista(i)}>{i.nome} <small>{i.grupo}</small></button>{/each}
-      {#if !resultadosAdd.some(i => normalizar(i.nome) === normalizar(addBusca))}<button class="novo" onclick={criarEAdicionar}>+ Criar “{addBusca.trim()}”</button>{/if}
+ {:else if tela === 'montar'}
+  <p class="lead">Marque o que precisa e a quantidade por loja. {#if lojas.length}Toque em <b>+</b> para usar a última quantidade.{/if}</p>
+  {#if !lojas.length}<p class="alerta">Nenhuma loja participa desta seção. Ajuste em ⚙︎ → Lojas.</p>{/if}
+  {#if abertos.length}
+   <div class="faltantes">
+    <div class="ft-cab"><strong>🔁 Ficaram faltando ({abertos.length})</strong><button class="link" onclick={incluirTodosFaltantes}>incluir todos</button></div>
+    {#each abertos as f (chave(f))}
+     {@const i = itemPorId.get(f.itemId)!}{@const l = listaPorId.get(f.listaId)}
+     <div class="ft">
+      <span class="sigla" style="--cor:{l?.cor}">{l?.sigla}</span>
+      <span class="ft-nome">{f.quantidade} · {i.nome} {@render unid(i)}<small>faltou em {f.desde}</small></span>
+      <button class="mini-ok" aria-label="Incluir na lista" onclick={() => estado = incluirFaltantes(estado, [f])}>+</button>
+      <button class="mini-x" aria-label="Não precisa mais" onclick={() => estado = descartarFaltante(estado, f)}>×</button>
      </div>
-    {/if}
-   </div>
-
-   <div class="rodape">
-    <button class="primary" onclick={() => copiarRelatorio('tudo')}>{copiado === 'tudo' ? 'Copiado ✓' : '▣ Copiar lista completa'}</button>
-    <button class="secondary" onclick={() => copiarRelatorio('abertos')}>{copiado === 'abertos' ? 'Copiado ✓' : '☷ Pendentes e não encontrados'}</button>
-    <div class="dois"><button class="secondary" onclick={() => copiarRelatorio('pendentes')}>{copiado === 'pendentes' ? 'Copiado ✓' : '◷ Só pendentes'}</button><button class="secondary" onclick={() => copiarRelatorio('faltou')}>{copiado === 'faltou' ? 'Copiado ✓' : '⊗ Só não encontrados'}</button></div>
-    <div class="dois"><button class="secondary" onclick={() => iniciarRodada(true)}>{confirmar === 'rodada' ? 'Toque de novo' : '↻ Nova semana'}</button><button class="secondary" onclick={() => window.print()}>Imprimir / PDF</button></div>
-    <p class="small">“Nova semana” mantém as quantidades e volta tudo para pendente. Preços: compras do THBT com NF-e (Supabase), por {janela ? `média de ${janela} dias` : 'todo o histórico'}.</p>
+    {/each}
    </div>
   {/if}
+  <div class="busca">
+   <input type="search" bind:value={busca} placeholder="Buscar item…" aria-label="Buscar item"/>
+   <button class="filtro" class:on={soEscolhidos} onclick={() => soEscolhidos = !soEscolhidos}>{soEscolhidos ? 'Escolhidos' : 'Todos'}</button>
+  </div>
+  {#each montagem as g (g.grupo)}
+   <h2 class="grupo">{EMOJI_GRUPO[g.grupo] ?? '📌'} {g.grupo}</h2>
+   <div class="tabela">
+    {#each g.itens as item (item.id)}
+     {@const qs = qtdPorItem.get(item.id)}
+     {@const r = resumos.get(item.id)}
+     <div class="linha" class:sel={!!qs} class:destaque={destaque === item.id}>
+      <div class="ln-nome">
+       <span class="t">{item.nome}</span>{@render unid(item)}
+       {#if r}<small class="px">méd {reais(r.media ?? r.ultima!.precoUnit)}{porUnid(r)}</small>{/if}
+      </div>
+      <div class="ln-q">
+       {#each lojas as l (l.id)}
+        {@const x = qs?.get(l.id)}
+        {#if x}
+         <label class="q-on" style="--cor:{l.cor}"><b>{l.sigla}</b><input id="q-{item.id}-{l.id}" value={x.quantidade} aria-label="Quantidade de {item.nome} em {l.nome}" onchange={(e) => mudarQtd(item, l, e.currentTarget.value)}/></label>
+        {:else}
+         <button class="q-off" style="--cor:{l.cor}" aria-label="Incluir {item.nome} em {l.nome}" onclick={() => ativar(item, l)}><b>{l.sigla}</b>+{#if item.ultimaQtd[l.id]}<small>{item.ultimaQtd[l.id]}</small>{/if}</button>
+        {/if}
+       {/each}
+      </div>
+     </div>
+    {/each}
+   </div>
+  {:else}
+   <p class="vazio-curto">Nada com esse filtro.</p>
+  {/each}
+  <form class="novo" onsubmit={(e) => {e.preventDefault(); criarNovo()}}>
+   <p class="rotulo">Item novo</p>
+   <div class="linha-acoes">
+    <input bind:value={nNome} placeholder="Nome (ex.: Páprica defumada)" aria-label="Nome do item novo"/>
+    <input class="qtd" bind:value={nUnidade} placeholder="un/kg" aria-label="Unidade"/>
+   </div>
+   <div class="linha-acoes"><select bind:value={nGrupo} aria-label="Grupo">{#each GRUPOS[secao] as gr (gr)}<option value={gr}>{EMOJI_GRUPO[gr]} {gr}</option>{/each}</select><button class="primary">Criar</button></div>
+   <p class="small">Sem histórico por enquanto: o vínculo com a compra é sugerido depois da primeira NF-e dele.</p>
+  </form>
+  <div class="barra">
+   <button class="secondary" onclick={() => copiarRelatorio('tudo')} disabled={!escolhidos}>{copiado === 'tudo' ? 'Copiado ✓' : '📋 Copiar'}</button>
+   <button class="primary" onclick={irComprar} disabled={!escolhidos}>Ir às compras · {escolhidos} {escolhidos === 1 ? 'item' : 'itens'} →</button>
+  </div>
 
- {:else if aba === 'itens'}
+ {:else if tela === 'comprar'}
+  <div class="metricas">
+   {#each [['comprado', 'Comprados', '✓'], ['indisponivel', 'Em falta', '✕'], ['pendente', 'Pendentes', '◷']] as [s, r, ic] (s)}
+    <button class="metrica m-{s}" class:on={filtroStatus === s} onclick={() => filtroStatus = filtroStatus === s ? 'todos' : s as Status}><strong>{contagem[s as Status]}</strong><span>{ic} {r}</span></button>
+   {/each}
+  </div>
+  {#if lojas.length > 1 || origens.length > 1}
+   <div class="chips-filtro">
+    {#if lojas.length > 1}
+     <button class:on={filtroLista === 'todas'} onclick={() => filtroLista = 'todas'}>Todas</button>
+     {#each lojas as l (l.id)}<button class:on={filtroLista === l.id} style="--cor:{l.cor}" onclick={() => filtroLista = l.id}><b class="sigla">{l.sigla}</b>{l.nome}</button>{/each}
+    {/if}
+    {#if origens.length > 1}
+     <span class="sep"></span>
+     <button class:on={filtroOrigem === 'todas'} onclick={() => filtroOrigem = 'todas'}>Toda origem</button>
+     {#each origens as o (o)}<button class:on={filtroOrigem === o} onclick={() => filtroOrigem = o}>{o}</button>{/each}
+    {/if}
+   </div>
+  {/if}
+  <div class="busca">
+   <input type="search" bind:value={busca} placeholder="Buscar na lista…" aria-label="Buscar na lista"/>
+   <button class="ean" onclick={lendo ? pararCamera : lerCodigo} aria-label="Ler código de barras">{lendo ? '✕' : '▥'}<span>{lendo ? 'Fechar' : 'EAN'}</span></button>
+  </div>
+  {#if lendo}<div class="camera"><video bind:this={video} autoplay muted playsinline aria-label="Câmera lendo código de barras"></video><span class="mira" aria-hidden="true"></span></div>{/if}
+  {#if lidoCodigo && !lendo}
+   <div class="lido">
+    {#if lidoProduto}
+     {@const r = indice ? resumir(indice, [lidoProduto.insumo != null ? {tipo: 'insumo', id: lidoProduto.insumo} : {tipo: 'produto', chave: lidoProduto.chave}], janela) : undefined}
+     <p class="eyebrow">EAN {lidoCodigo} · {lidoProduto.fornecedor}</p>
+     <h3>{lidoProduto.descricao}</h3>
+     {#if r}<p class="small">Último {reais(r.ultima!.precoUnit)}{porUnid(r)} em {dataCurta(r.ultima!.data)} · média {reais(r.media ?? 0)}{porUnid(r)}</p>{/if}
+     <p class="small">Não está na lista desta compra. Incluir em:</p>
+     <div class="linha-acoes">{#each lojas as l (l.id)}<button class="secondary curto" onclick={() => incluirLido(lidoProduto!, l)}>{l.nome}</button>{/each}</div>
+    {:else}<p class="small">EAN {lidoCodigo} não aparece nas NF-e sincronizadas.</p>{/if}
+    <button class="link" onclick={() => {lidoCodigo = ''; lidoProduto = undefined}}>fechar</button>
+   </div>
+  {/if}
+  {#each compra as g (g.grupo)}
+   <h2 class="grupo">{EMOJI_GRUPO[g.grupo] ?? '📌'} {g.grupo}</h2>
+   {#each g.itens as item (item.id)}
+    {@const es = lojasVisiveis.map(id => qtdPorItem.get(item.id)?.get(id)).filter((x): x is Entrada => !!x)}
+    {@const feito = es.every(x => x.status === 'comprado')}
+    {@const faltou = es.every(x => x.status === 'indisponivel')}
+    {@const c = comparacao(item)}
+    <article class="item" id="item-{item.id}" class:feito class:faltou class:destaque={destaque === item.id} class:aberto={aberto === item.id}>
+     <div class="cab">
+      <button class="nome" onclick={() => abrir(item)} aria-expanded={aberto === item.id}>
+       <span class="t">{item.nome}</span>{@render unid(item)}
+       {#if es.length === 1}<span class="q">{es[0].quantidade}</span>{/if}
+       {#if c}<span class="selo v-{c.veredito}">{pct(c.vsMedia ?? c.vsUltima)}</span>{/if}
+       {#if es.some(x => x.herdada)}<span class="herd">faltou antes</span>{/if}
+      </button>
+      {#if es.length === 1}
+       {@const x = es[0]}
+       <div class="acoes">
+        <button class="ac buy" class:on={x.status === 'comprado'} aria-pressed={x.status === 'comprado'} aria-label="Comprado: {item.nome}" onclick={() => tocar(x.listaId, item.id, 'comprado')}>✓</button>
+        <button class="ac miss" class:on={x.status === 'indisponivel'} aria-pressed={x.status === 'indisponivel'} aria-label="Em falta: {item.nome}" onclick={() => tocar(x.listaId, item.id, 'indisponivel')}>✕</button>
+       </div>
+      {:else}
+       <div class="acoes"><button class="ac buy" class:on={feito} aria-label="Comprado em todas as lojas: {item.nome}" onclick={() => tocarTudo(item.id, es, 'comprado')}>✓✓</button></div>
+      {/if}
+     </div>
+     {#if es.length > 1}
+      <div class="porlista">
+       {#each es as x (x.listaId)}{@const l = listaPorId.get(x.listaId)}
+        <div class="pl st-{x.status}" style="--cor:{l?.cor}">
+         <b class="sigla">{l?.sigla}</b><span class="q">{x.quantidade}</span>
+         <button class="mini buy" class:on={x.status === 'comprado'} aria-label="Comprado em {l?.nome}" onclick={() => tocar(x.listaId, item.id, 'comprado')}>✓</button>
+         <button class="mini miss" class:on={x.status === 'indisponivel'} aria-label="Em falta em {l?.nome}" onclick={() => tocar(x.listaId, item.id, 'indisponivel')}>✕</button>
+        </div>
+       {/each}
+      </div>
+     {/if}
+     {@render precos(item, resumos.get(item.id))}
+     {#if aberto === item.id}
+      {@const r = resumos.get(item.id)}
+      <div class="detalhe">
+       <form class="gondola" onsubmit={(e) => {e.preventDefault(); salvarGondola(item)}}>
+        <label for="gp-{item.id}">Preço na gôndola</label>
+        <div class="linha-acoes">
+         <input id="gp-{item.id}" class="preco" bind:value={gPreco} inputmode="decimal" placeholder="R$ 0,00"/>
+         <span class="por">por</span>
+         <input class="qtd" bind:value={gQtd} inputmode="decimal" aria-label="Conteúdo da embalagem"/>
+         <select bind:value={gUnid} aria-label="Unidade">{#each UNIDADES as u (u)}<option value={u}>{rotulo(u)}</option>{/each}</select>
+         <button class="primary curto">Comparar</button>
+        </div>
+        {#if estado.pesquisa[item.id]}<button type="button" class="link" onclick={() => {estado = registrarPesquisa(estado, item.id); gPreco = ''}}>apagar preço da gôndola</button>{/if}
+       </form>
+       {#if r}
+        <table class="hist"><thead><tr><th>Data</th><th>Onde / produto</th><th>Emb.</th><th>{porUnid(r)}</th></tr></thead><tbody>
+         {#each r.compras.slice(-8).reverse() as cp, k (k)}
+          <tr><td>{dataCurta(cp.data, true)}</td><td><b>{cp.fornecedor}</b> {cp.descricao}</td><td>{reais(cp.precoEmbalagem)}{#if cp.embalagem}<small class="emb">{cp.embalagem}</small>{/if}</td><td class="u">{reais(cp.precoUnit)}</td></tr>
+         {/each}
+        </tbody></table>
+       {/if}
+       <button class="link" onclick={() => editar(item)}>editar item e vínculo</button>
+      </div>
+     {/if}
+    </article>
+   {/each}
+  {:else}
+   <p class="vazio-curto">Nada com esse filtro.{#if filtroStatus !== 'todos' || busca || filtroOrigem !== 'todas'} <button class="link" onclick={() => {filtroStatus = 'todos'; busca = ''; filtroOrigem = 'todas'}}>mostrar tudo</button>{/if}</p>
+  {/each}
+  <div class="exportar">
+   <p class="rotulo">Enviar no WhatsApp</p>
+   <div class="dois">
+    <button class="secondary" onclick={() => copiarRelatorio('tudo')}>{copiado === 'tudo' ? 'Copiado ✓' : '📋 Lista completa'}</button>
+    <button class="secondary" onclick={() => copiarRelatorio('abertos')}>{copiado === 'abertos' ? 'Copiado ✓' : '⏳ Falta comprar'}</button>
+    <button class="secondary" onclick={() => copiarRelatorio('pendentes')}>{copiado === 'pendentes' ? 'Copiado ✓' : '⬜ Só pendentes'}</button>
+    <button class="secondary" onclick={() => copiarRelatorio('faltou')}>{copiado === 'faltou' ? 'Copiado ✓' : '❌ Em falta'}</button>
+   </div>
+  </div>
+  <div class="barra">
+   <button class="secondary" onclick={() => irTela('montar')}>← Lista</button>
+   <button class="primary" onclick={() => irTela('fechar')}>Finalizar compra →</button>
+  </div>
+
+ {:else if tela === 'fechar'}
+  {@const c = contar(entradas)}
+  <div class="resumo-fim">
+   <p class="eyebrow">{SECOES.find(s => s.id === secao)?.nome.toUpperCase()} · {ciclo.nome || hoje()}</p>
+   <h2>Esta lista termina com {c.comprado} {c.comprado === 1 ? 'item comprado' : 'itens comprados'} e {c.indisponivel} em falta.</h2>
+   <div class="metricas fixas">
+    <div class="metrica m-comprado"><strong>{c.comprado}</strong><span>✓ Comprados</span></div>
+    <div class="metrica m-indisponivel"><strong>{c.indisponivel}</strong><span>✕ Em falta</span></div>
+    <div class="metrica m-pendente"><strong>{c.pendente}</strong><span>◷ Sem marcar</span></div>
+   </div>
+  </div>
+  {#if naoComprados.length}
+   <p class="rotulo">Faltantes para a próxima lista <small>(desmarque o que não precisa mais)</small></p>
+   <div class="tabela">
+    {#each naoComprados as x (chave(x))}
+     {@const i = itemPorId.get(x.itemId)!}{@const l = listaPorId.get(x.listaId)}
+     <label class="linha fim">
+      <input type="checkbox" checked={levar[chave(x)] !== false} onchange={(e) => levar = {...levar, [chave(x)]: e.currentTarget.checked}}/>
+      <span class="sigla" style="--cor:{l?.cor}">{l?.sigla}</span>
+      <span class="ln-nome"><span class="t">{x.quantidade} · {i.nome}</span>{@render unid(i)}</span>
+      <span class="st">{x.status === 'indisponivel' ? '❌ em falta' : '⬜ sem marcar'}</span>
+     </label>
+    {/each}
+   </div>
+   <p class="small">Os marcados aparecem no topo da próxima lista desta seção, em “Ficaram faltando”, até serem comprados ou descartados.</p>
+  {:else}
+   <p class="vazio-curto">🎉 Tudo comprado.</p>
+  {/if}
+  <button class="secondary" onclick={() => copiar('fim', relatorioFechamento(estado, secao, levarLista))}>{copiado === 'fim' ? 'Copiado ✓' : '📋 Copiar resumo para o WhatsApp'}</button>
+  <div class="barra">
+   <button class="secondary" onclick={() => irTela('comprar')}>← Compras</button>
+   <button class="primary" onclick={encerrar}>{confirmar === 'encerrar' ? 'Toque de novo para encerrar' : `Encerrar lista${levarLista.length ? ` · ${levarLista.length} ficam` : ''}`}</button>
+  </div>
+
+ {:else if tela === 'catalogo'}
   {#if editId !== undefined}
    <form id="editor-item" class="editor" onsubmit={(e) => {e.preventDefault(); salvarItem()}}>
-    <p class="eyebrow">{editId ? 'EDITAR ITEM' : 'NOVO ITEM'}</p>
-    <label for="e-nome">Nome</label><input id="e-nome" bind:value={eNome} placeholder="Maionese (2,8 kg)" required/>
-    <div class="row"><div><label for="e-grupo">Grupo</label><select id="e-grupo" bind:value={eGrupo}>{#each GRUPOS as g (g)}<option value={g}>{EMOJI_GRUPO[g]} {g}</option>{/each}</select></div>
-     <div><label for="e-emb">Embalagem na gôndola</label><div class="linha-acoes"><input id="e-emb" class="qtd" bind:value={eQtd} inputmode="decimal" placeholder="2,8"/><select bind:value={eUnid} aria-label="Unidade da embalagem">{#each UNIDADES as u (u)}<option value={u}>{rotulo(u)}</option>{/each}</select></div></div></div>
-    {#if listas.length}
-     <p class="rotulo">Quantidade nesta semana <small>(vazio = fora da lista)</small></p>
-     <div class="quant">{#each listas as l (l.id)}<label style="--cor:{l.cor}"><b class="sigla">{l.sigla}</b>{l.nome}<input bind:value={eQuant[l.id]} placeholder="—"/></label>{/each}</div>
-    {/if}
-    <p class="rotulo">Vínculo com compras (NF-e → Saipos)</p>
+    <p class="eyebrow">{editId ? 'EDITAR ITEM' : 'NOVO ITEM'} · {SECOES.find(s => s.id === secao)?.nome.toUpperCase()}</p>
+    <label for="e-nome">Nome</label><input id="e-nome" bind:value={eNome} placeholder="Maionese" required/>
+    <div class="row">
+     <div><label for="e-un">Unidade na loja</label><input id="e-un" bind:value={eUnidade} placeholder="kg, 2,8 kg, 900 ml, fd"/></div>
+     <div><label for="e-orig">Origem</label><select id="e-orig" bind:value={eOrigem}>{#each [...new Set([...ORIGENS, eOrigem])] as o (o)}<option value={o}>{o}</option>{/each}</select></div>
+    </div>
+    <label for="e-grupo">Grupo</label><select id="e-grupo" bind:value={eGrupo}>{#each [...new Set([...GRUPOS[secao], eGrupo])] as gr (gr)}<option value={gr}>{EMOJI_GRUPO[gr] ?? '📌'} {gr}</option>{/each}</select>
+    {#if embalagemDaUnidade(eUnidade)}{@const em = embalagemDaUnidade(eUnidade)!}<p class="small">Comparação na gôndola usa {String(em.qtd).replace('.', ',')} {rotulo(em.unidade)} por embalagem.</p>{/if}
+    <p class="rotulo">Vínculo com compras (NF-e / Saipos)</p>
     {#if eVinculos.length}
-     <div class="chips">{#each eVinculos as v, i (i)}<span class="chip">{rotuloVinculo(indice, v)}<button type="button" aria-label="Remover vínculo" onclick={() => eVinculos = eVinculos.filter((_, j) => j !== i)}>×</button></span>{/each}</div>
-    {:else}<p class="small">Sem vínculo: o item não mostra preço. Escolha abaixo o insumo do Saipos ou o produto da nota.</p>{/if}
+     <div class="chips">{#each eVinculos as v, k (k)}<span class="chip">{rotuloVinculo(indice, v)}<button type="button" aria-label="Remover vínculo" onclick={() => eVinculos = eVinculos.filter((_, j) => j !== k)}>×</button></span>{/each}</div>
+     {#if eAuto}<p class="small">Sugerido automaticamente. Salvar confirma.</p>{/if}
+    {:else}<p class="small">Sem vínculo. Item novo fica assim até a primeira NF-e; depois escolha abaixo.</p>{/if}
     {#if indice}
-     <input bind:value={eBusca} placeholder="Buscar insumo ou produto (ex.: maionese, vigor)" aria-label="Buscar vínculo"/>
+     <input bind:value={eBusca} placeholder="Buscar insumo ou produto da nota" aria-label="Buscar vínculo"/>
      <div class="candidatos">
-      {#each candidatosEditor as c (JSON.stringify(c.vinculo))}
-       <button type="button" onclick={() => eVinculos = [...eVinculos, c.vinculo]}><span>{c.rotulo}</span><small>{c.detalhe} · {c.compras} {c.compras === 1 ? 'compra' : 'compras'}</small></button>
+      {#each candidatosEditor as cd (JSON.stringify(cd.vinculo))}
+       <button type="button" onclick={() => eVinculos = [...eVinculos, cd.vinculo]}><span>{cd.rotulo}</span><small>{cd.detalhe} · {cd.compras} NF</small></button>
       {:else}<p class="small">Nenhum candidato para “{eBusca || eNome}”.</p>{/each}
      </div>
-    {:else}<p class="small">Sincronize os preços (aba Preços) para buscar vínculos.</p>{/if}
+    {:else}<p class="small">Sincronize os preços para buscar vínculos.</p>{/if}
     {#if resumoEditor}
-     <p class="rotulo">Prévia</p>
-     <div class="precos"><div class="caixa"><span class="rot">Último · {dataCurta(resumoEditor.ultima!.data)}</span><strong>{reais(resumoEditor.ultima!.precoUnit)}<small>{porUnid(resumoEditor)}</small></strong><span class="det">{resumoEditor.ultima!.descricao}</span></div><div class="caixa media"><span class="rot">Média</span><strong>{resumoEditor.media ? reais(resumoEditor.media) : '—'}<small>{porUnid(resumoEditor)}</small></strong><span class="det">{resumoEditor.compras.length} compras</span></div></div>
+     <p class="small">Prévia: último {reais(resumoEditor.ultima!.precoUnit)}{porUnid(resumoEditor)} · média {reais(resumoEditor.media ?? 0)}{porUnid(resumoEditor)} · {resumoEditor.compras.length} NF</p>
     {/if}
     <div class="dois"><button class="primary">Salvar</button><button type="button" class="secondary" onclick={() => editId = undefined}>Cancelar</button></div>
-    {#if editId}<button type="button" class="secondary perigo" onclick={excluirItem}>{confirmar === 'excluir-item' ? 'Toque de novo para excluir' : 'Excluir item do catálogo'}</button>{/if}
+    {#if editId}<button type="button" class="secondary perigo" onclick={excluirItem}>{confirmar === 'excluir-item' ? 'Toque de novo para excluir' : 'Excluir do catálogo'}</button>{/if}
    </form>
   {:else}
-   <div class="linha-acoes topo-itens"><button class="primary" onclick={() => editar()}>+ Novo item</button></div>
-   {#if semVinculo || semHistorico}<p class="small">{semVinculo} sem vínculo · {semHistorico} com vínculo mas sem compra com NF-e.</p>{/if}
-   {#each catalogo as item, i (item.id)}
-    {#if i === 0 || catalogo[i - 1].grupo !== item.grupo}<h2 class="grupo">{EMOJI_GRUPO[item.grupo] ?? '📌'} {item.grupo}</h2>{/if}
-    {@const r = resumos.get(item.id)}
-    <div class="cat" class:destaque={destaque === item.id}>
-     <button class="cat-nome" onclick={() => editar(item)}><span>{item.nome}</span><small>{item.vinculos.length ? item.vinculos.map(v => rotuloVinculo(indice, v)).join(' + ') : 'sem vínculo'}{#if r} · média {reais(r.media ?? 0)}{porUnid(r)}{/if}</small></button>
-     <div class="cat-q">{#each listas as l (l.id)}{@const x = estado.entradas.find(e => e.itemId === item.id && e.listaId === l.id)}
-      <label style="--cor:{l.cor}" title={l.nome}><b class="sigla">{l.sigla}</b><input value={x?.quantidade ?? ''} placeholder="—" aria-label="Quantidade em {l.nome}" onchange={(e) => estado = definirQuantidade(estado, l.id, item.id, e.currentTarget.value)}/></label>
-     {/each}</div>
+   <div class="busca"><input type="search" bind:value={busca} placeholder="Buscar no catálogo…" aria-label="Buscar no catálogo"/><button class="filtro on" onclick={() => editar()}>+ Item</button></div>
+   <p class="small">{itensSecao.length} itens · {semVinculo} sem vínculo{#if autoPendentes} · <b>{autoPendentes} vínculos automáticos para confirmar</b>{/if}</p>
+   {#each catalogo as g (g.grupo)}
+    <h2 class="grupo">{EMOJI_GRUPO[g.grupo] ?? '📌'} {g.grupo}</h2>
+    <div class="tabela">
+     {#each g.itens as item (item.id)}
+      <div class="linha cat" class:destaque={destaque === item.id}>
+       <button class="cat-nome" onclick={() => editar(item)}>
+        <span><span class="t">{item.nome}</span>{@render unid(item)}</span>
+        <small class:auto={item.vinculoAuto}>{item.vinculos.length ? item.vinculos.map(v => rotuloVinculo(indice, v)).join(' + ') : 'sem vínculo'}</small>
+       </button>
+       {#if item.vinculoAuto}<button class="mini-ok" aria-label="Confirmar vínculo automático" onclick={() => confirmarAuto(item)}>✓</button>{/if}
+      </div>
+     {/each}
     </div>
-   {:else}
-    <p class="vazio-curto">Catálogo vazio. Crie itens ou importe a lista de 26/01 em Listas.</p>
    {/each}
   {/if}
 
- {:else if aba === 'listas'}
+ {:else if tela === 'lojas'}
   <div class="bloco">
-   {#each listas as l, i (l.id)}
+   <p class="rotulo">Lojas e listas</p>
+   {#each [...estado.listas].sort((a, b) => a.ordem - b.ordem) as l, k (l.id)}
     <div class="lista-edit" style="--cor:{l.cor}">
      <input class="sig" value={l.sigla} maxlength="3" aria-label="Sigla" onchange={(e) => estado = atualizarLista(estado, l.id, {sigla: e.currentTarget.value.toUpperCase() || l.sigla})}/>
-     <input value={l.nome} aria-label="Nome da lista" onchange={(e) => estado = atualizarLista(estado, l.id, {nome: e.currentTarget.value.trim() || l.nome})}/>
-     <select value={l.tipo} aria-label="Tipo" onchange={(e) => estado = atualizarLista(estado, l.id, {tipo: e.currentTarget.value as Lista['tipo']})}><option value="loja">Loja</option><option value="pessoal">Pessoal</option></select>
-     <div class="cores">{#each CORES as c (c)}<button aria-label="Cor" class:on={l.cor === c} style="background:{c}" onclick={() => estado = atualizarLista(estado, l.id, {cor: c})}></button>{/each}</div>
-     <div class="ord"><button aria-label="Subir" disabled={i === 0} onclick={() => moverLista(l, -1)}>↑</button><button aria-label="Descer" disabled={i === listas.length - 1} onclick={() => moverLista(l, 1)}>↓</button>
-      <button class="perigo" onclick={() => confirmarDuasVezes(`lista-${l.id}`, () => {estado = removerLista(estado, l.id); if (filtroLista === l.id) filtroLista = 'todas'})}>{confirmar === `lista-${l.id}` ? 'confirmar' : 'excluir'}</button></div>
-     <p class="small">{estado.entradas.filter(x => x.listaId === l.id).length} itens nesta semana</p>
+     <input value={l.nome} aria-label="Nome" onchange={(e) => estado = atualizarLista(estado, l.id, {nome: e.currentTarget.value.trim() || l.nome})}/>
+     <div class="secs">{#each SECOES as s (s.id)}<label><input type="checkbox" checked={l.secoes.includes(s.id)} onchange={() => alternarSecaoLista(l, s.id)}/> {s.emoji} {s.nome}</label>{/each}</div>
+     <div class="cores">{#each CORES as cor (cor)}<button aria-label="Cor" class:on={l.cor === cor} style="background:{cor}" onclick={() => estado = atualizarLista(estado, l.id, {cor})}></button>{/each}</div>
+     <div class="ord"><button aria-label="Subir" disabled={k === 0} onclick={() => moverLista(l, -1)}>↑</button><button aria-label="Descer" disabled={k === estado.listas.length - 1} onclick={() => moverLista(l, 1)}>↓</button>
+      <button class="perigo" onclick={() => confirmarDuasVezes(`lista-${l.id}`, () => {estado = removerLista(estado, l.id); filtroLista = 'todas'})}>{confirmar === `lista-${l.id}` ? 'confirmar' : 'excluir'}</button></div>
     </div>
    {/each}
    <form class="linha-acoes" onsubmit={(e) => {e.preventDefault(); novaLista()}}>
     <input bind:value={novaListaNome} placeholder="Nova lista (ex.: Casa)" aria-label="Nome da nova lista"/>
-    <select bind:value={novaListaTipo} aria-label="Tipo"><option value="loja">Loja</option><option value="pessoal">Pessoal</option></select>
-    <button class="primary">Criar</button>
+    <button class="primary curto">Criar</button>
    </form>
+   <p class="small">Cada lista aparece só nas seções marcadas. Bebidas e salão começam só na Freguesia (a loja com salão).</p>
   </div>
   <div class="bloco">
-   <p class="rotulo">Semana</p>
-   <div class="dois"><button class="secondary" onclick={() => iniciarRodada(true)}>{confirmar === 'rodada' ? 'Toque de novo' : 'Nova semana (manter qtds)'}</button><button class="secondary" onclick={() => iniciarRodada(false)}>{confirmar === 'rodada-zero' ? 'Toque de novo' : 'Nova semana (zerar)'}</button></div>
-   <button class="secondary" onclick={importar2601}>Importar lista de 26/01 (Freguesia + Tijuca)</button>
+   <p class="rotulo">Histórico de compras</p>
+   {#each estado.historico.slice(0, 12) as h (h.id)}
+    {@const c = contar(h.itens.map(x => ({status: x.status}) as Entrada))}
+    <div class="hist-linha"><span>{SECOES.find(s => s.id === h.secao)?.emoji} {h.nome}</span><span>✅ {c.comprado} · ❌ {c.indisponivel} · ⬜ {c.pendente}</span></div>
+   {:else}<p class="small">Nenhuma compra encerrada ainda.</p>{/each}
   </div>
   <div class="bloco">
-   <p class="rotulo">Backup</p>
-   <p class="small">Listas e itens ficam só neste aparelho. Baixe o backup para passar para outro celular.</p>
+   <p class="rotulo">Modelo e backup</p>
+   <button class="secondary" onclick={importar}>Recarregar modelo da planilha (completa sem duplicar)</button>
    <div class="dois"><button class="secondary" onclick={baixarBackup}>Baixar backup</button><button class="secondary" onclick={() => arquivoBackup?.click()}>Restaurar backup</button></div>
    <input type="file" accept="application/json,.json" hidden bind:this={arquivoBackup} onchange={(e) => restaurarBackup(e.currentTarget.files?.[0])}/>
+   <p class="small">Listas e itens ficam só neste aparelho. Use o backup para passar para outro.</p>
   </div>
 
  {:else}
   <div class="bloco">
-   <p class="rotulo">Sincronização com o Supabase</p>
-   <p class="small">O app baixa as compras com NF-e já processadas e guarda no aparelho: na gôndola funciona sem sinal. Sincroniza sozinho ao abrir, se os preços tiverem mais de 6 h.</p>
+   <p class="rotulo">Preços das NF-e (Supabase)</p>
+   <p class="small">O app baixa as compras com NF-e já processadas e guarda no aparelho: na gôndola funciona sem sinal. Atualiza sozinho ao abrir, se os preços tiverem mais de 6 h. Itens sem vínculo recebem sugestão automática quando o nome bate sem ambiguidade.</p>
    <form onsubmit={(e) => {e.preventDefault(); void sincronizar()}}>
     <label for="tok">Token deste aparelho</label>
     <input id="tok" type="password" bind:value={token} autocomplete="off" placeholder="thb_…"/>
     <button class="primary" disabled={sincronizando}>{sincronizando ? 'Sincronizando…' : 'Sincronizar agora'}</button>
    </form>
    {#if snapshot}
-    <div class="stats">
-     <div><strong>{snapshot.obs.length}</strong><span>compras</span></div>
-     <div><strong>{snapshot.produtos.length}</strong><span>produtos</span></div>
-     <div><strong>{snapshot.produtos.filter(p => p.gtin).length}</strong><span>com EAN</span></div>
-    </div>
+    <div class="stats"><div><strong>{snapshot.obs.length}</strong><span>compras</span></div><div><strong>{snapshot.produtos.length}</strong><span>produtos</span></div><div><strong>{snapshot.produtos.filter(p => p.gtin).length}</strong><span>com EAN</span></div></div>
     <p class="small">Período {periodo} · baixado em {new Date(snapshot.geradoEm).toLocaleString('pt-BR')}.</p>
    {/if}
   </div>
   <div class="bloco">
    <p class="rotulo">Média de preço</p>
    <div class="janelas">{#each JANELAS as j (j.d)}<button class:on={janela === j.d} onclick={() => escolherJanela(j.d)}>{j.r}</button>{/each}</div>
-   <p class="small">Média ponderada pela quantidade comprada, na unidade do insumo (R$/kg, R$/L, R$/un). Sem compra na janela, usa todo o histórico. O custo inclui frete, desconto, IPI e ST da nota.</p>
+   <p class="small">Ponderada pela quantidade comprada, na unidade do insumo (R$/kg, R$/L, R$/un). Inclui frete, desconto, IPI e ST da nota.</p>
   </div>
  {/if}
 
@@ -566,75 +712,128 @@
 </section>
 
 <style>
- .compras{--v:#1f6a43;--r:#b83d3d;--a:#9a6b16;max-width:760px}
- /* base própria: os estilos de botão/campo da página são escopados a ela */
+ .compras{--v:#1f6a43;--r:#b83d3d;--a:#9a6b16;max-width:760px;padding-bottom:84px}
  .eyebrow{font-size:10px;font-weight:700;letter-spacing:2px;color:#6b8076;margin:0}
  .small{font-size:12px;line-height:1.55;color:#65766f;margin:10px 0 0}
+ .lead{font-size:13px;color:#45594f;margin:14px 0 4px}
  label{display:block;margin:14px 0 6px;font-size:12px;font-weight:600}
  input,select{width:100%;border:1px solid #c7d2c8;border-radius:8px;padding:11px 12px;background:#fff;color:#203f35;font-size:16px}
+ input[type=checkbox]{width:20px;height:20px;padding:0;accent-color:#193f35;flex:0 0 auto}
  select{padding:10px 8px}
  button{font:inherit;cursor:pointer;color:inherit}
- button:disabled{opacity:.55;cursor:default}
- .primary,.secondary{padding:13px 16px;border-radius:8px;font-size:14px;font-weight:600;margin-top:10px;width:100%}
+ button:disabled{opacity:.45;cursor:default}
+ .primary,.secondary{padding:13px 16px;border-radius:9px;font-size:14px;font-weight:600;margin-top:10px;width:100%}
  .primary{background:#193f35;color:#fff;border:1px solid #193f35}
  .secondary{background:#fff;color:#193f35;border:1px solid #aebfb2}
+ .curto{width:auto;margin-top:0;padding:10px 14px}
  .perigo{color:#833c25!important}
  .row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
- .topo{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin:18px 0 12px}
- .topo h1{font-size:clamp(20px,4.6vw,32px);font-weight:600;letter-spacing:-.6px;line-height:1.15;margin:6px 0 0}
- .sync{display:grid;justify-items:center;gap:2px;border:1px solid #c7d2c8;background:#fff;border-radius:10px;padding:8px 10px;font-size:20px;color:#193f35;min-width:76px}
- .sync span{font-size:10px;color:#65766f;white-space:nowrap}
+ .cabeca{display:flex;gap:8px;align-items:stretch;margin-top:14px}
+ .secoes{flex:1;display:flex;background:#e3e9e2;border-radius:12px;padding:4px;gap:4px;min-width:0}
+ .secoes button{flex:1;border:0;background:transparent;border-radius:9px;padding:10px 6px;font-size:13px;font-weight:700;color:#45594f;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+ .secoes button.on{background:#193f35;color:#fff}
+ .secoes i,.passos i{font-style:normal;font-size:10px;background:#d9a43a;color:#fff;border-radius:99px;padding:1px 6px;margin-left:5px}
+ .sync{display:grid;justify-items:center;align-content:center;border:1px solid #c7d2c8;background:#fff;border-radius:12px;padding:4px 10px;font-size:18px;color:#193f35;min-width:58px}
+ .sync span{font-size:10px;color:#65766f}
  .sync.girando{animation:gira 1s linear infinite}
  @keyframes gira{to{transform:rotate(360deg)}}
- .abas{display:flex;gap:4px;background:#e8ece5;padding:4px;border-radius:11px;position:sticky;top:0;z-index:5}
- .abas button{flex:1;border:0;background:transparent;padding:10px 4px;border-radius:8px;font-size:13px;font-weight:600;color:#45594f;position:relative}
- .abas button.on{background:#fff;color:#10251f;box-shadow:0 1px 4px #0002}
- .abas i{font-style:normal;font-size:10px;background:#d9a43a;color:#fff;border-radius:99px;padding:1px 6px;margin-left:4px}
+ .passos{display:flex;gap:6px;margin-top:10px;position:sticky;top:0;z-index:6;background:#f5f4ef;padding:6px 0}
+ .passos button{flex:1;display:flex;align-items:center;justify-content:center;gap:6px;border:1px solid #c7d2c8;background:#fff;border-radius:10px;padding:9px 4px;font-size:13px;font-weight:700;color:#45594f}
+ .passos button b{display:inline-grid;place-items:center;width:20px;height:20px;border-radius:50%;background:#e3e9e2;font-size:11px}
+ .passos button small{font-size:10px;font-weight:600;color:#7b8981}
+ .passos button.on{border-color:#193f35;background:#193f35;color:#fff}
+ .passos button.on b{background:#fff;color:#193f35}
+ .passos button.on small{color:#cfe0d4}
+ .passos .mais{flex:0 0 46px;font-size:17px}
+ .sub{display:flex;gap:6px;margin-top:4px}
+ .sub button{flex:1;border:0;border-bottom:2px solid transparent;background:transparent;padding:8px 2px;font-size:12px;font-weight:700;color:#65766f}
+ .sub button.on{border-color:#193f35;color:#10251f}
  .alerta{font-size:12px;color:#7a5a1d;background:#fcf3dc;border-radius:8px;padding:9px 12px;margin:10px 0}
- .vazio{display:grid;gap:4px;margin-top:20px;padding:20px;border:1px dashed #c7d2c8;border-radius:12px;text-align:center;background:#fbfcfa}
- .metricas{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:16px 0 12px}
- .metrica{border:0;border-radius:11px;background:#fff;padding:10px 4px;display:grid;gap:2px;box-shadow:0 0 0 1px #dce2d9 inset}
- .metrica strong{font-size:24px;font-variant-numeric:tabular-nums}
- .metrica span{font-size:11px;color:#65766f}
- .metrica.m-comprado strong{color:var(--v)} .metrica.m-indisponivel strong{color:var(--r)}
- .metrica.on{box-shadow:0 0 0 2px #193f35 inset}
- .filtro-listas{display:flex;gap:6px;overflow-x:auto;padding-bottom:4px;scrollbar-width:none}
- .filtro-listas button{flex:0 0 auto;border:1px solid #c7d2c8;background:#fff;border-radius:99px;padding:8px 14px;font-size:13px;font-weight:600;color:#2d544b;display:flex;align-items:center;gap:6px}
- .filtro-listas button.on{background:#193f35;color:#fff;border-color:#193f35}
- .sigla{display:inline-grid;place-items:center;min-width:20px;height:20px;padding:0 4px;border-radius:6px;background:var(--cor,#6b8076);color:#fff;font-size:11px;font-weight:800}
+ .vazio{display:grid;gap:4px;margin-top:18px;padding:20px;border:1px dashed #c7d2c8;border-radius:12px;background:#fbfcfa}
+ .vazio h2{font-size:18px;margin:0}
+ .vazio-curto{font-size:13px;color:#91a096;text-align:center;padding:18px 0}
+ .faltantes{border:1px solid #e7c98e;background:#fdf7ea;border-radius:12px;padding:10px 12px;margin-top:12px}
+ .ft-cab{display:flex;justify-content:space-between;align-items:center;font-size:13px}
+ .ft{display:flex;align-items:center;gap:8px;padding:7px 0;border-top:1px solid #f1e3c4}
+ .ft-nome{flex:1;min-width:0;font-size:13px;font-weight:600}
+ .ft-nome small{display:block;font-weight:400;color:#8a7a55;font-size:11px}
+ .mini-ok,.mini-x{width:36px;height:34px;border-radius:8px;border:1px solid #c7d2c8;background:#fff;font-size:17px;flex:0 0 auto}
+ .mini-ok{color:#1f6a43;border-color:#9fc7ad}
+ .mini-x{color:#9a4b3a}
  .busca{display:flex;gap:8px;margin-top:12px}
  .busca input{flex:1}
- .ean{border:1px solid #193f35;background:#193f35;color:#fff;border-radius:6px;padding:0 12px;font-size:18px;display:flex;align-items:center;gap:6px}
- .ean span{font-size:12px;font-weight:600}
+ .filtro{flex:0 0 auto;border:1px solid #aebfb2;background:#fff;border-radius:8px;padding:0 14px;font-size:13px;font-weight:600}
+ .filtro.on{background:#193f35;color:#fff;border-color:#193f35}
+ .grupo{font-size:14px;margin:18px 0 6px;letter-spacing:0}
+ .tabela{background:#fff;border:1px solid #dce2d9;border-radius:12px;overflow:hidden}
+ .linha{display:flex;align-items:center;gap:8px;padding:8px 10px;border-top:1px solid #eef1ec;min-height:52px;transition:background .3s}
+ .linha:first-child{border-top:0}
+ .linha.sel{background:#f0f7f1}
+ .linha.destaque{background:#dff0e4}
+ .ln-nome{flex:1;min-width:0;display:flex;flex-wrap:wrap;align-items:center;gap:4px 6px}
+ .t{font-size:14px;font-weight:600;color:#10251f}
+ .un{font-size:11px;font-weight:700;color:#2d544b;background:#e6eee5;border-radius:6px;padding:2px 6px;white-space:nowrap}
+ .orig{font-size:10px;font-weight:700;color:#7b3fa0;background:#f1e8f6;border-radius:6px;padding:2px 6px}
+ .px{flex-basis:100%;font-size:11px;color:#6b8076}
+ .ln-q{display:flex;gap:5px;flex:0 0 auto}
+ .q-off{display:grid;justify-items:center;align-content:center;min-width:46px;height:42px;border:1px dashed #b9c6bb;background:#fff;border-radius:9px;font-size:16px;color:#6b7a72;padding:0 6px;line-height:1}
+ .q-off b{font-size:10px;color:var(--cor)}
+ .q-off small{font-size:9px;color:#9aa69f;margin-top:2px}
+ .q-on{display:grid;justify-items:center;margin:0;min-width:46px}
+ .q-on b{font-size:10px;color:#fff;background:var(--cor);border-radius:5px 5px 0 0;width:100%;text-align:center;line-height:14px}
+ .q-on input{width:56px;padding:6px 2px;text-align:center;font-size:15px;font-weight:700;border-radius:0 0 8px 8px;border-color:var(--cor);border-top:0}
+ .novo{background:#fff;border:1px dashed #c7d2c8;border-radius:12px;padding:4px 12px 12px;margin-top:18px}
+ .rotulo{font-size:12px;font-weight:700;margin:18px 0 8px;color:#193f35}
+ .rotulo small{font-weight:400;color:#65766f}
+ .linha-acoes{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:6px}
+ .linha-acoes input{flex:1;min-width:90px}
+ .linha-acoes .qtd,.qtd{flex:0 0 74px;width:74px;min-width:0}
+ .linha-acoes .preco{flex:1 1 90px}
+ .linha-acoes select{width:auto;flex:1 1 auto}
+ .linha-acoes .primary{width:auto;margin-top:0;flex:0 0 auto}
+ .barra{position:fixed;left:0;right:0;bottom:0;z-index:15;display:flex;gap:8px;padding:10px 14px calc(10px + env(safe-area-inset-bottom));background:#f5f4efee;backdrop-filter:blur(6px);border-top:1px solid #dce2d9}
+ .barra button{margin-top:0}
+ .barra .secondary{flex:0 0 auto;width:auto}
+ .barra .primary{flex:1}
+ @media(min-width:901px){.barra{left:250px}}
+ .metricas{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:14px 0 10px}
+ .metrica{border:0;border-radius:11px;background:#fff;padding:10px 4px;display:grid;gap:2px;text-align:center;box-shadow:0 0 0 1px #dce2d9 inset}
+ .metrica strong{font-size:24px;font-variant-numeric:tabular-nums}
+ .metrica span{font-size:11px;color:#65766f}
+ .m-comprado strong{color:var(--v)} .m-indisponivel strong{color:var(--r)}
+ .metrica.on{box-shadow:0 0 0 2px #193f35 inset}
+ .chips-filtro{display:flex;gap:6px;overflow-x:auto;padding-bottom:4px;scrollbar-width:none;align-items:center}
+ .chips-filtro button{flex:0 0 auto;border:1px solid #c7d2c8;background:#fff;border-radius:99px;padding:7px 12px;font-size:12px;font-weight:600;color:#2d544b;display:flex;align-items:center;gap:6px}
+ .chips-filtro button.on{background:#193f35;color:#fff;border-color:#193f35}
+ .chips-filtro .sep{flex:0 0 1px;height:22px;background:#c7d2c8}
+ .sigla{display:inline-grid;place-items:center;min-width:20px;height:20px;padding:0 4px;border-radius:6px;background:var(--cor,#6b8076);color:#fff;font-size:11px;font-weight:800;flex:0 0 auto}
+ .ean{border:1px solid #193f35;background:#193f35;color:#fff;border-radius:8px;padding:0 12px;font-size:18px;display:flex;align-items:center;gap:6px}
+ .ean span{font-size:12px;font-weight:700}
  .camera{position:relative;margin-top:10px;border-radius:12px;overflow:hidden;background:#10251f}
  .camera video{display:block;width:100%;max-height:42vh;object-fit:cover}
  .mira{position:absolute;left:12%;right:12%;top:50%;height:2px;background:#ff4d4d;box-shadow:0 0 12px #ff4d4d}
  .lido{margin-top:12px;border:1px solid #9fbfae;background:#f2f7f1;border-radius:12px;padding:14px}
- .lido h3{margin:4px 0 8px;font-size:16px}
- .contador{font-size:12px;color:#65766f;margin:14px 0 0}
- .grupo{font-size:14px;margin:20px 0 8px;letter-spacing:0}
+ .lido h3{margin:4px 0 4px;font-size:16px}
  .item{background:#fff;border:1px solid #dce2d9;border-radius:12px;padding:10px 12px;margin-bottom:8px;transition:background .3s,border-color .3s}
  .item.destaque{background:#e3f1e6;border-color:#7fb393}
  .item.aberto{border-color:#9fbfae;box-shadow:0 2px 10px #0001}
+ .item.feito{background:#f6faf6}
  .item.feito .t{text-decoration:line-through;color:#8a948e}
  .item.faltou .t{color:var(--r)}
  .cab{display:flex;align-items:center;gap:10px}
- .nome{flex:1;min-width:0;border:0;background:transparent;text-align:left;padding:4px 0;display:flex;align-items:center;gap:8px;flex-wrap:wrap;color:#10251f}
- .nome .t{font-size:15px;font-weight:600}
- .nome .q,.pl .q{font-size:13px;font-weight:700;color:#2d544b;background:#edf2ec;border-radius:6px;padding:2px 7px;font-variant-numeric:tabular-nums}
+ .nome{flex:1;min-width:0;border:0;background:transparent;text-align:left;padding:4px 0;display:flex;align-items:center;gap:5px 7px;flex-wrap:wrap}
+ .nome .q,.pl .q{font-size:13px;font-weight:800;color:#10251f;background:#edf2ec;border-radius:6px;padding:2px 7px;font-variant-numeric:tabular-nums}
+ .herd{font-size:10px;font-weight:700;color:#8a5b12;background:#fbecc9;border-radius:6px;padding:2px 6px}
  .acoes{display:flex;gap:6px}
- .ac{width:44px;height:42px;border-radius:10px;border:1px solid #c7d2c8;background:#fff;font-size:18px;color:#6b7a72}
- .ac.buy.on{background:var(--v);border-color:var(--v);color:#fff}
- .ac.miss.on{background:var(--r);border-color:var(--r);color:#fff}
+ .ac{width:46px;height:44px;border-radius:10px;border:1px solid #c7d2c8;background:#fff;font-size:18px;color:#6b7a72}
+ .ac.buy.on,.mini.buy.on{background:var(--v);border-color:var(--v);color:#fff}
+ .ac.miss.on,.mini.miss.on{background:var(--r);border-color:var(--r);color:#fff}
  .porlista{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0 2px}
  .pl{display:flex;align-items:center;gap:6px;border:1px solid #e1e6de;border-radius:10px;padding:4px 4px 4px 6px;background:#fbfcfa}
  .pl.st-comprado{background:#e7f3ea;border-color:#b6d8c0}
  .pl.st-indisponivel{background:#f8e7e3;border-color:#e3b9ae}
- .pl .estado{font-size:11px;color:#65766f;padding-right:6px}
- .mini{width:34px;height:32px;border-radius:8px;border:1px solid #c7d2c8;background:#fff;font-size:15px;color:#6b7a72}
- .mini.buy.on{background:var(--v);border-color:var(--v);color:#fff}
- .mini.miss.on{background:var(--r);border-color:var(--r);color:#fff}
- .precos{display:grid;grid-template-columns:1fr 1fr auto;gap:8px;margin-top:8px;align-items:stretch}
+ .mini{width:36px;height:34px;border-radius:8px;border:1px solid #c7d2c8;background:#fff;font-size:15px;color:#6b7a72}
+ .precos{display:grid;grid-template-columns:1fr 1fr auto;gap:8px;margin-top:8px}
  .caixa{border-radius:9px;background:#f4f6f2;padding:7px 9px;display:grid;gap:1px;min-width:0}
  .caixa.media{background:#eef3f8}
  .caixa .rot{font-size:10px;letter-spacing:.6px;text-transform:uppercase;color:#6b8076}
@@ -646,61 +845,43 @@
  .selo{font-size:11px;font-weight:800;border-radius:99px;padding:2px 8px}
  .v-barato{color:var(--v);background:#dff0e4} .v-caro{color:var(--r);background:#f8e1dc} .v-na-media{color:var(--a);background:#f6eed8}
  .veredito{font-size:12px;border-radius:8px;padding:6px 9px;margin:8px 0 0;line-height:1.45}
- .detalhe{margin-top:10px;border-top:1px solid #e5e9e2;padding-top:6px}
- .gondola label{margin-top:8px}
- .linha-acoes{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
- .linha-acoes input{flex:1;min-width:90px}
- .linha-acoes .qtd,.qtd{flex:0 0 64px;width:64px;min-width:0}
- .linha-acoes .preco{flex:1 1 90px}
- .linha-acoes select{width:auto;flex:0 0 auto}
- .linha-acoes .primary{width:auto;margin-top:0;flex:0 0 auto}
+ .detalhe{margin-top:10px;border-top:1px solid #e5e9e2;padding-top:4px}
  .por{font-size:12px;color:#65766f}
  .hist{width:100%;border-collapse:collapse;margin-top:12px;font-size:12px}
- .hist th{text-align:left;font-size:10px;letter-spacing:.6px;text-transform:uppercase;color:#6b8076;padding:4px 4px;border-bottom:1px solid #e5e9e2}
+ .hist th{text-align:left;font-size:10px;letter-spacing:.6px;text-transform:uppercase;color:#6b8076;padding:4px;border-bottom:1px solid #e5e9e2}
  .hist td{padding:6px 4px;border-bottom:1px solid #f0f2ee;vertical-align:top;font-variant-numeric:tabular-nums}
- .hist td small{color:#7b8981}
- .hist .emb{display:block;font-size:10px}
+ .hist .emb{display:block;font-size:10px;color:#7b8981}
  .hist .u{font-weight:700;white-space:nowrap}
  .link{border:0;background:transparent;color:#2f6f9f;text-decoration:underline;font-size:12px;padding:6px 0}
- .adicionar{margin-top:22px;border:1px solid #dce2d9;background:#fff;border-radius:12px;padding:4px 12px 12px}
- .resultados{display:grid;gap:6px;margin-top:8px}
- .resultados button{text-align:left;border:1px solid #dce2d9;background:#fbfcfa;border-radius:8px;padding:10px;font-size:13px}
- .resultados small{color:#7b8981;margin-left:6px}
- .resultados .novo{border-style:dashed;color:#1f6a43;font-weight:600}
- .rodape{display:grid;gap:0;margin-top:18px}
- .dois{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+ .exportar{margin-top:18px}
+ .dois{display:grid;grid-template-columns:1fr 1fr;gap:0 8px}
+ .resumo-fim{background:#fff;border:1px solid #dce2d9;border-radius:12px;padding:14px;margin-top:14px}
+ .resumo-fim h2{font-size:19px;line-height:1.3;margin:6px 0 0}
+ .metricas.fixas{margin-bottom:0}
+ .linha.fim{margin:0;font-weight:500;cursor:pointer}
+ .linha.fim .st{font-size:11px;color:#65766f;white-space:nowrap}
  .editor{background:#fff;border:1px solid #9fbfae;border-radius:12px;padding:14px;margin-top:14px}
- .rotulo{font-size:12px;font-weight:700;margin:18px 0 8px;color:#193f35}
- .rotulo small{font-weight:400;color:#65766f}
- .quant{display:grid;gap:6px}
- .quant label{display:flex;align-items:center;gap:8px;margin:0;font-weight:500}
- .quant input{flex:0 0 110px;width:110px;margin-left:auto}
  .chips{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px}
  .chip{display:flex;align-items:center;gap:4px;background:#e2efe4;color:#10342a;border-radius:99px;padding:5px 6px 5px 11px;font-size:12px;font-weight:600}
  .chip button{border:0;background:transparent;font-size:16px;line-height:1;color:#2d544b;padding:0 4px}
- .candidatos{display:grid;gap:6px;margin-top:8px;max-height:320px;overflow:auto}
+ .candidatos{display:grid;gap:6px;margin-top:8px;max-height:300px;overflow:auto}
  .candidatos button{display:grid;text-align:left;gap:2px;border:1px solid #dce2d9;background:#fbfcfa;border-radius:8px;padding:9px 10px;font-size:13px}
  .candidatos small{font-size:11px;color:#7b8981}
- .topo-itens{margin-top:14px}
- .topo-itens .primary{margin-top:0}
- .cat{display:flex;align-items:center;gap:8px;background:#fff;border:1px solid #e1e6de;border-radius:10px;padding:8px 10px;margin-bottom:6px}
- .cat.destaque{background:#e3f1e6}
- .cat-nome{flex:1;min-width:0;border:0;background:transparent;text-align:left;display:grid;gap:2px;padding:2px 0}
- .cat-nome span{font-size:14px;font-weight:600}
+ .cat-nome{flex:1;min-width:0;border:0;background:transparent;text-align:left;display:grid;gap:3px;padding:2px 0}
+ .cat-nome > span{display:flex;flex-wrap:wrap;gap:4px 6px;align-items:center}
  .cat-nome small{font-size:11px;color:#7b8981;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
- .cat-q{display:flex;gap:4px}
- .cat-q label{display:grid;justify-items:center;gap:2px;margin:0}
- .cat-q input{width:52px;padding:6px 4px;text-align:center;font-size:13px}
- .bloco{background:#fff;border:1px solid #dce2d9;border-radius:12px;padding:6px 14px 14px;margin-top:14px}
- .lista-edit{display:grid;grid-template-columns:56px 1fr auto;gap:8px;align-items:center;border-bottom:1px solid #eef1ec;padding:12px 0}
+ .cat-nome small.auto{color:#9a6b16;font-weight:600}
+ .cat-nome small.auto::before{content:'auto · '}
+ .bloco{background:#fff;border:1px solid #dce2d9;border-radius:12px;padding:2px 14px 14px;margin-top:14px}
+ .lista-edit{display:grid;grid-template-columns:56px 1fr;gap:8px;align-items:center;border-bottom:1px solid #eef1ec;padding:12px 0}
  .lista-edit .sig{text-align:center;font-weight:800;color:#fff;background:var(--cor);border-color:var(--cor)}
- .lista-edit .cores{grid-column:1/-1;display:flex;gap:6px}
+ .lista-edit .secs,.lista-edit .cores,.lista-edit .ord{grid-column:1/-1;display:flex;gap:6px;flex-wrap:wrap}
+ .secs label{display:flex;align-items:center;gap:6px;margin:0;font-weight:500;font-size:13px;border:1px solid #dce2d9;border-radius:8px;padding:6px 10px}
  .cores button{width:26px;height:26px;border-radius:50%;border:2px solid transparent}
  .cores button.on{border-color:#10251f;box-shadow:0 0 0 2px #fff inset}
- .lista-edit .ord{grid-column:1/-1;display:flex;gap:6px}
  .ord button{border:1px solid #c7d2c8;background:#fff;border-radius:7px;padding:6px 12px;font-size:12px}
- .ord .perigo{margin-left:auto;color:#833c25}
- .lista-edit .small{grid-column:1/-1;margin:0}
+ .ord .perigo{margin-left:auto}
+ .hist-linha{display:flex;justify-content:space-between;gap:8px;font-size:13px;padding:8px 0;border-bottom:1px solid #f0f2ee}
  .stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:14px}
  .stats div{background:#f4f6f2;border-radius:9px;padding:10px;display:grid;text-align:center}
  .stats strong{font-size:20px}
@@ -708,11 +889,10 @@
  .janelas{display:flex;gap:6px;flex-wrap:wrap}
  .janelas button{border:1px solid #aebfb2;background:#fff;border-radius:99px;padding:8px 14px;font-size:12px}
  .janelas button.on{background:#193f35;color:#fff;border-color:#193f35}
- .vazio-curto{font-size:13px;color:#91a096;text-align:center;padding:20px 0}
- .toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);background:#10251f;color:#fff;border-radius:99px;padding:10px 18px;font-size:13px;z-index:20;box-shadow:0 6px 20px #0003;max-width:90vw;text-align:center}
- @media(max-width:520px){.precos{grid-template-columns:1fr 1fr}.spark{display:none}.caixa strong{font-size:16px}}
+ .toast{position:fixed;left:50%;bottom:84px;transform:translateX(-50%);background:#10251f;color:#fff;border-radius:99px;padding:10px 18px;font-size:13px;z-index:20;box-shadow:0 6px 20px #0003;max-width:90vw;text-align:center}
+ @media(max-width:520px){.precos{grid-template-columns:1fr 1fr}.spark{display:none}.caixa strong{font-size:16px}.secoes button{font-size:12px}}
  @media print{
-  :global(aside),:global(header),:global(.notice),:global(footer),.abas,.metricas,.filtro-listas,.busca,.adicionar,.rodape,.acoes,.sync,.mini,.detalhe,.spark{display:none!important}
-  :global(.app){display:block!important}.item{break-inside:avoid;border-color:#ccc}
+  :global(aside),:global(header),:global(.notice),:global(footer),.cabeca,.passos,.sub,.metricas,.chips-filtro,.busca,.novo,.barra,.exportar,.acoes,.mini,.detalhe,.spark,.faltantes{display:none!important}
+  .item{break-inside:avoid;border-color:#ccc}
  }
 </style>

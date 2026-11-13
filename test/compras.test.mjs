@@ -2,11 +2,13 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import {indexar, resumir, compararGondola, produtoPorGtin} from '../src/lib/compras/precos.ts'
 import {buscarCandidatos} from '../src/lib/compras/vinculo.ts'
+import {vinculosAutomaticos} from '../src/lib/compras/vinculo.ts'
 import {
-  ESTADO_INICIAL, criarLista, criarItem, definirQuantidade, alternarStatus, marcarItem, metricas,
-  novaRodada, registrarPesquisa, relatorio, removerItem, removerLista, revisar
+  ESTADO_INICIAL, criarLista, criarItem, definirQuantidade, alternarStatus, marcarItem, contar, entradasDaSecao,
+  registrarPesquisa, relatorio, relatorioFechamento, removerItem, removerLista, revisar, separarUnidade, embalagemDaUnidade,
+  fecharCompra, faltantesAbertos, incluirFaltantes, descartarFaltante, irPara, listasDaSecao, rotuloItem
 } from '../src/lib/compras/estado.ts'
-import {importarLista2601} from '../src/lib/compras/semente.ts'
+import {importarPlanilha, TAMANHO_PLANILHA} from '../src/lib/compras/semente.ts'
 import {baixarSnapshot, ErroSincronizacao} from '../src/lib/compras/sincronizar.ts'
 
 /** Snapshot mínimo com a mesma forma do RPC compras_precos. */
@@ -92,60 +94,125 @@ test('Sugestão de vínculo: insumo antes de produto, sem acento e sem unidade',
   assert.equal(buscarCandidatos(IDX, 'Feijão').length, 0)
 })
 
-test('Listas: quantidade, status alternado, métricas e remoção em cascata', () => {
-  let {estado: e, lista: f} = criarLista(ESTADO_INICIAL, 'Freguesia')
-  let r = criarLista(e, 'Tijuca'); e = r.estado; const t = r.lista
-  const it = criarItem(e, {nome: 'Sal', grupo: 'Insumos / Mercado'}); e = it.estado
-  e = definirQuantidade(e, f.id, it.item.id, '03')
-  e = definirQuantidade(e, t.id, it.item.id, '01')
-  assert.deepEqual(metricas(e, [f.id, t.id]), {pendente: 2, comprado: 0, indisponivel: 0})
-  e = alternarStatus(e, f.id, it.item.id, 'comprado')
-  assert.equal(metricas(e, [f.id]).comprado, 1)
-  e = alternarStatus(e, f.id, it.item.id, 'comprado')
-  assert.equal(metricas(e, [f.id]).pendente, 1, 'tocar de novo volta para pendente')
-  e = marcarItem(e, it.item.id, [f.id, t.id], 'indisponivel')
-  assert.equal(metricas(e, [f.id, t.id]).indisponivel, 2)
-  e = definirQuantidade(e, t.id, it.item.id, '  ')
-  assert.equal(e.entradas.length, 1, 'quantidade vazia tira da lista')
-  e = removerLista(e, f.id)
-  assert.equal(e.entradas.length, 0)
-  assert.equal(e.itens.length, 1, 'catálogo continua')
-  e = removerItem(e, it.item.id)
-  assert.equal(e.itens.length, 0)
+test('Unidade da loja: separa do nome e vira embalagem quando é numérica', () => {
+  assert.deepEqual(separarUnidade('Óleo Garrafa (900 ml)'), {nome: 'Óleo Garrafa', unidade: '900 ml'})
+  assert.deepEqual(separarUnidade('Sprite (350 ml) (c/6)'), {nome: 'Sprite', unidade: '350 ml · c/6'})
+  assert.deepEqual(separarUnidade('Kraft P / G'), {nome: 'Kraft P / G', unidade: ''})
+  assert.deepEqual(embalagemDaUnidade('2,8 kg'), {qtd: 2.8, unidade: 'kg'})
+  assert.deepEqual(embalagemDaUnidade('kg'), {qtd: 1, unidade: 'kg'})
+  assert.deepEqual(embalagemDaUnidade('1,01L'), {qtd: 1.01, unidade: 'l'})
+  assert.deepEqual(embalagemDaUnidade('350 ml · c/6'), {qtd: 350, unidade: 'ml'})
+  assert.equal(embalagemDaUnidade('fd'), undefined)
+  assert.equal(rotuloItem({nome: 'Sal', unidade: 'fd'}), 'Sal (fd)')
 })
 
-test('Nova rodada: tudo pendente, preços de gôndola apagados', () => {
-  let {estado: e, lista: f} = criarLista(ESTADO_INICIAL, 'Freguesia')
-  const it = criarItem(e, {nome: 'Sal', grupo: 'Insumos / Mercado'}); e = it.estado
-  e = definirQuantidade(e, f.id, it.item.id, '03')
-  e = alternarStatus(e, f.id, it.item.id, 'comprado')
-  e = registrarPesquisa(e, it.item.id, {preco: 2.39, qtd: 1, unidade: 'kg', em: 1})
-  const n = novaRodada(e, true, '02/02/2026')
-  assert.equal(n.entradas[0].status, 'pendente')
-  assert.deepEqual(n.pesquisa, {})
-  assert.equal(novaRodada(e, false, 'x').entradas.length, 0)
+test('Planilha: duas seções, lojas certas, quantidades só como sugestão', () => {
+  const e = importarPlanilha(ESTADO_INICIAL)
+  assert.deepEqual(listasDaSecao(e, 'producao').map(l => l.nome), ['Tijuca', 'Freguesia'])
+  assert.deepEqual(listasDaSecao(e, 'bebidas').map(l => l.nome), ['Freguesia'])
+  assert.equal(e.itens.filter(i => i.secao === 'producao').length, TAMANHO_PLANILHA.producao)
+  assert.equal(e.itens.filter(i => i.secao === 'bebidas').length, TAMANHO_PLANILHA.bebidas)
+  assert.equal(e.entradas.length, 0, 'nada pré-selecionado')
+  const oleo = e.itens.find(i => i.nome === 'Óleo Garrafa')
+  assert.equal(oleo.unidade, '900 ml')
+  assert.deepEqual(Object.values(oleo.ultimaQtd), ['40', '40'])
+  const coca = e.itens.find(i => i.nome === 'Coca')
+  assert.equal(coca.unidade, '1,5 L')
+  assert.equal(e.itens.find(i => i.nome === 'Heineken' && i.unidade === '600 ml').origem, 'Byll')
+  assert.equal(importarPlanilha(e).itens.length, e.itens.length, 'reimportar não duplica')
 })
 
-test('Importar 26/01: duas lojas, 31 itens, 35 entradas e relatório no formato antigo', () => {
-  const e = importarLista2601(ESTADO_INICIAL)
-  assert.deepEqual(e.listas.map(l => [l.nome, l.sigla]), [['Freguesia', 'F'], ['Tijuca', 'T']])
-  assert.equal(e.itens.length, 31)
-  assert.equal(e.entradas.length, 35)
-  const de2 = importarLista2601(e)
-  assert.equal(de2.itens.length, 31, 'reimportar não duplica')
-  const tij = e.listas[1].id
-  const txt = relatorio(e, [tij], 'tudo', 'THB – COMPRAS 26/01/2026')
-  assert.equal(txt, [
-    '*THB – COMPRAS 26/01/2026*', '', '*TIJUCA*', '', '*🥬 Hortifruti*',
-    '⬜ 03 Alface Americana', '⬜ 04 Alface Crespa', '⬜ 03 kg Cebola Roxa', '⬜ 04 Rúcula'
-  ].join('\n'))
+test('Ciclo completo: montar, comprar, fechar levando faltantes para a próxima lista', () => {
+  let e = importarPlanilha(ESTADO_INICIAL)
+  const [tij, fre] = listasDaSecao(e, 'producao')
+  const id = n => e.itens.find(i => i.nome === n && i.secao === 'producao').id
+  const rucula = id('Rúcula'), oleo = id('Óleo Garrafa'), sal = id('Sal')
+  e = definirQuantidade(e, tij.id, rucula, '3')
+  e = definirQuantidade(e, fre.id, rucula, '3')
+  e = definirQuantidade(e, fre.id, oleo, '40')
+  e = definirQuantidade(e, fre.id, sal, '1')
+  e = irPara(e, 'producao', 'comprar', '12/11/2026')
+  assert.equal(e.ciclos.producao.nome, '12/11/2026')
+  e = alternarStatus(e, fre.id, oleo, 'comprado')
+  e = alternarStatus(e, tij.id, rucula, 'indisponivel')
+  e = alternarStatus(e, fre.id, rucula, 'indisponivel')
+  assert.deepEqual(contar(entradasDaSecao(e, 'producao')), {pendente: 1, comprado: 1, indisponivel: 2})
+  const levar = [{itemId: rucula, listaId: tij.id}, {itemId: rucula, listaId: fre.id}]
+  const txt = relatorioFechamento(e, 'producao', levar)
+  assert.match(txt, /COMPRA FINALIZADA PRODUÇÃO/)
+  assert.match(txt, /✅ 1 comprados · ❌ 2 em falta · ⬜ 1 sem marcar/)
+  assert.match(txt, /❌ 3 · Rúcula \(un\)/)
+  assert.doesNotMatch(txt, /Sal/, 'sal sem marcar não foi levado')
+  e = fecharCompra(e, 'producao', levar)
+  assert.equal(entradasDaSecao(e, 'producao').length, 0)
+  assert.equal(e.ciclos.producao.etapa, 'montar')
+  assert.equal(e.historico[0].itens.length, 4)
+  assert.equal(e.itens.find(i => i.id === oleo).ultimaQtd[fre.id], '40')
+  const abertos = faltantesAbertos(e, 'producao')
+  assert.deepEqual(abertos.map(f => [f.quantidade, f.desde]), [['3', '12/11/2026'], ['3', '12/11/2026']])
+  // próxima lista: inclui um faltante, descarta o outro
+  e = incluirFaltantes(e, [abertos[0]])
+  assert.equal(e.entradas[0].herdada, '12/11/2026')
+  e = descartarFaltante(e, abertos[1])
+  assert.equal(faltantesAbertos(e, 'producao').length, 0)
+  e = alternarStatus(e, abertos[0].listaId, rucula, 'comprado')
+  e = fecharCompra(e, 'producao', [])
+  assert.equal(e.faltantes.length, 0, 'comprado sai da lista de faltantes')
 })
 
-test('Revisar descarta entradas órfãs do armazenamento', () => {
-  const e = revisar({listas: [{id: 'a', nome: 'A'}], itens: [{id: 'i', nome: 'X'}], entradas: [{listaId: 'a', itemId: 'i'}, {listaId: 'b', itemId: 'i'}]})
+test('Seções independentes: fechar produção não mexe em bebidas', () => {
+  let e = importarPlanilha(ESTADO_INICIAL)
+  const fre = listasDaSecao(e, 'bebidas')[0]
+  const coca = e.itens.find(i => i.nome === 'Coca-Cola').id
+  const alho = e.itens.find(i => i.nome === 'Alho').id
+  e = definirQuantidade(e, fre.id, coca, '2 fd')
+  e = definirQuantidade(e, fre.id, alho, '4')
+  e = irPara(e, 'bebidas', 'comprar', 'x')
+  e = fecharCompra(e, 'producao', [])
+  assert.equal(entradasDaSecao(e, 'bebidas').length, 1)
+  assert.equal(e.ciclos.bebidas.etapa, 'comprar')
+  const r = relatorio(e, 'bebidas', 'tudo')
+  assert.match(r, /🥤 \*THB · COMPRAS BEBIDAS E SALÃO\* · x/)
+  assert.match(r, /⬜ 2 fd · Coca-Cola \(310 ml\)/)
+})
+
+test('Migração da versão 1: unidade sai do nome, listas ganham seções, compra em andamento continua', () => {
+  const v1 = {versao: 1, listas: [{id: 'a', nome: 'Tijuca', sigla: 'T', ordem: 0}], itens: [{id: 'i', nome: 'Maionese (2,8 kg)', grupo: 'Insumos / Mercado', vinculos: []}],
+    entradas: [{listaId: 'a', itemId: 'i', quantidade: '6', status: 'comprado'}, {listaId: 'b', itemId: 'i'}], pesquisa: {}, rodadaNome: '26/01/2026'}
+  const e = revisar(v1)
+  assert.equal(e.versao, 2)
+  assert.deepEqual([e.itens[0].nome, e.itens[0].unidade, e.itens[0].grupo, e.itens[0].secao], ['Maionese', '2,8 kg', 'Insumos', 'producao'])
+  assert.deepEqual(e.listas[0].secoes, ['producao', 'bebidas'])
   assert.equal(e.entradas.length, 1)
-  assert.deepEqual(e.itens[0].vinculos, [])
+  assert.deepEqual(e.ciclos.producao, {etapa: 'comprar', nome: '26/01/2026', desde: 0})
   assert.deepEqual(revisar(null).listas, [])
+})
+
+test('Remover lista e item limpa entradas e faltantes', () => {
+  let {estado: e, lista} = criarLista(ESTADO_INICIAL, 'Casa', 'pessoal', ['producao'])
+  const r = criarItem(e, {nome: 'Sabão', secao: 'producao', grupo: 'Limpeza', unidade: 'un'}); e = r.estado
+  e = definirQuantidade(e, lista.id, r.item.id, '2')
+  e = fecharCompra(e, 'producao', [{itemId: r.item.id, listaId: lista.id}])
+  assert.equal(e.faltantes.length, 1)
+  assert.equal(removerItem(e, r.item.id).faltantes.length, 0)
+  assert.equal(removerLista(e, lista.id).faltantes.length, 0)
+  e = registrarPesquisa(e, r.item.id, {preco: 3, qtd: 1, unidade: 'un', em: 1})
+  assert.equal(Object.keys(removerItem(e, r.item.id).pesquisa).length, 0)
+  assert.equal(marcarItem(definirQuantidade(e, lista.id, r.item.id, '1'), r.item.id, 'comprado').entradas[0].status, 'comprado')
+})
+
+test('Vínculo automático só quando inequívoco e com compra; respeita recusa', () => {
+  const auto = vinculosAutomaticos(IDX, [
+    {id: 'a', nome: 'Maionese', vinculos: []},
+    {id: 'b', nome: 'Couve', vinculos: []},
+    {id: 'c', nome: 'Feijão', vinculos: []},
+    {id: 'd', nome: 'Maionese', vinculos: [], vinculoAuto: false},
+    {id: 'e', nome: 'Maionese', vinculos: [{tipo: 'insumo', id: 1}]}
+  ])
+  assert.deepEqual(auto, [
+    {itemId: 'a', vinculo: {tipo: 'insumo', id: 4615267}},
+    {itemId: 'b', vinculo: {tipo: 'produto', chave: '06057223:3372'}}
+  ])
 })
 
 test('Sincronizar: token recusado e resposta válida', async () => {

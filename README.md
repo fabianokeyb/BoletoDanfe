@@ -6,15 +6,20 @@ cadastro manual de nota e exportação em TSV para a planilha. PWA estático (Sv
 **App publicado:** https://fabianokeyb.github.io/BoletoDanfe/
 
 ## Compras da semana (módulo 02)
-Listas por loja (Freguesia, Tijuca) e pessoais, num catálogo único de itens. Cada item se vincula a
-um insumo do Saipos ou a um produto de NF-e, e mostra o **último preço** e a **média ponderada**
-(30/90/180 dias ou todo o histórico) lado a lado, na unidade do insumo (R$/kg, R$/L, R$/un).
-- Preço na gôndola: informe preço e embalagem → % contra a média e contra a última compra.
-- Ler EAN: a câmera lê o código do produto e abre o item da lista (ou mostra o histórico e oferece incluir).
-- Relatórios para WhatsApp (completo, pendentes + não encontrados, só pendentes, só não encontrados).
-- Dados: listas no IndexedDB do aparelho (backup JSON em Listas); preços baixados do Supabase pela
-  função `public.compras_precos(token)`, que exige o token do aparelho (só o hash fica no banco).
-- Offline: o service worker guarda o app e os assets; listas e preços já baixados funcionam sem sinal.
+Duas seções independentes, como as abas da planilha: **Produção** (embalagens, limpeza, rancho,
+insumos, hortifruti; lojas Tijuca e Freguesia) e **Bebidas e salão** (salão, refrigerantes, litros,
+cervejas; com origem de compra). Cada seção tem o próprio ciclo em três telas:
+1. **Montar** — o catálogo inteiro; toque em + na loja para incluir (usa a última quantidade).
+   Item novo entra sem histórico e ganha vínculo com a NF-e depois da primeira compra dele.
+   No topo, “Ficaram faltando”: o que não foi comprado em listas anteriores.
+2. **Comprar** — ✓ comprado / ✕ em falta por loja, último preço e média lado a lado, preço da
+   gôndola contra a média, leitura de EAN e relatórios para WhatsApp.
+3. **Fechar** — totais da compra e escolha do que vai para a lista de faltantes; resumo para WhatsApp.
+
+Dados: listas no IndexedDB do aparelho (backup JSON em ⚙︎ → Lojas); preços baixados do Supabase pela
+função `public.compras_precos(token)`, que exige o token do aparelho. Na sincronização, itens sem
+vínculo recebem sugestão automática quando o nome bate sem ambiguidade (marcada “auto” até confirmar).
+O service worker guarda o app: listas e preços já baixados funcionam sem sinal.
 
 ## Desenvolvimento
 ```

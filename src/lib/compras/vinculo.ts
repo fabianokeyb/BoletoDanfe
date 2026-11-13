@@ -8,6 +8,8 @@ export interface Candidato {
   detalhe: string
   compras: number
   pontos: number
+  /** Fração das palavras buscadas encontradas no candidato (1 = todas). */
+  cobertura: number
 }
 
 const VAZIAS = new Set(['de', 'da', 'do', 'das', 'dos', 'e', 'com', 'para', 'p', 'kg', 'g', 'gr', 'ml', 'l', 'lt', 'lts', 'un', 'und', 'c', 'cx', 'pct', 'pc', 'tp', 'bj', 'pet', 'cong', 'kg1', 'un1'])
@@ -48,14 +50,14 @@ export function buscarCandidatos(indice: Indice, texto: string, limite = 8): Can
     if (pts < 0.5) continue
     const produtos = indice.produtosPorInsumo.get(ins.id) ?? []
     const compras = produtos.reduce((s, p) => s + (indice.obsPorProduto.get(p.chave)?.length ?? 0), 0)
-    out.push({vinculo: {tipo: 'insumo', id: ins.id}, rotulo: ins.descricao, detalhe: `Insumo Saipos · ${ins.unidade}${ins.grupo ? ' · ' + ins.grupo : ''}`, compras, pontos: pts + (compras ? 0.2 : 0) + 0.1})
+    out.push({vinculo: {tipo: 'insumo', id: ins.id}, rotulo: ins.descricao, detalhe: `Insumo Saipos · ${ins.unidade}${ins.grupo ? ' · ' + ins.grupo : ''}`, compras, cobertura: pts, pontos: pts + (compras ? 0.2 : 0) + 0.1})
   }
   for (const p of indice.produtos.values()) {
     if (p.insumo != null) continue
     const pts = pontuar(q, palavras(p.descricao))
     if (pts < 0.5) continue
     const compras = indice.obsPorProduto.get(p.chave)?.length ?? 0
-    out.push({vinculo: {tipo: 'produto', chave: p.chave}, rotulo: p.descricao, detalhe: `Produto ${p.fornecedor} · sem insumo`, compras, pontos: pts + (compras ? 0.2 : 0)})
+    out.push({vinculo: {tipo: 'produto', chave: p.chave}, rotulo: p.descricao, detalhe: `Produto ${p.fornecedor} · sem insumo`, compras, cobertura: pts, pontos: pts + (compras ? 0.2 : 0)})
   }
   return out.sort((a, b) => b.pontos - a.pontos || b.compras - a.compras || a.rotulo.localeCompare(b.rotulo)).slice(0, limite)
 }
@@ -77,4 +79,23 @@ export function rotuloVinculo(indice: Indice | undefined, v: Vinculo): string {
  */
 export function mesmoVinculo(a: Vinculo, b: Vinculo): boolean {
   return a.tipo === b.tipo && (a.tipo === 'insumo' ? a.id === (b as typeof a).id : a.chave === (b as typeof a).chave)
+}
+
+/**
+ * Vínculo automático para itens sem vínculo, só quando a escolha é inequívoca:
+ * o melhor candidato cobre todas as palavras do nome, já tem compra com NF-e e nenhum
+ * outro candidato cobre todas. O app marca o vínculo como automático até o usuário confirmar.
+ * @param indice índices do snapshot
+ * @param itens itens a avaliar (só os sem vínculo e não recusados)
+ * @returns pares item → vínculo sugerido
+ */
+export function vinculosAutomaticos(indice: Indice, itens: {id: string, nome: string, vinculos: Vinculo[], vinculoAuto?: boolean}[]): {itemId: string, vinculo: Vinculo}[] {
+  const out: {itemId: string, vinculo: Vinculo}[] = []
+  for (const item of itens) {
+    // vinculoAuto === false: o usuário já recusou/limpou o vínculo; não insistir
+    if (item.vinculos.length || item.vinculoAuto === false) continue
+    const [a, b] = buscarCandidatos(indice, item.nome, 2)
+    if (a && a.cobertura === 1 && a.compras > 0 && !(b && b.cobertura === 1)) out.push({itemId: item.id, vinculo: a.vinculo})
+  }
+  return out
 }
