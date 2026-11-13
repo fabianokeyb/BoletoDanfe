@@ -422,6 +422,7 @@
  }
 </script>
 
+{#snippet selo(n: number, rotulo: string)}{#if n}<span class="badge" aria-label="{n} {rotulo}">{n > 99 ? '99+' : n}</span>{/if}{/snippet}
 {#snippet unid(item: Item)}{#if item.unidade}<span class="un">{item.unidade}</span>{/if}{/snippet}
 
 {#snippet precos(item: Item, r: Resumo | undefined)}
@@ -455,16 +456,16 @@
 <section class="compras" class:com-teclado={teclado > 0} style="--teclado:{teclado}px" onfocusin={aoFocar} onfocusout={aoDesfocar}>
  <div class="fixo">
   <nav class="passos" aria-label="Etapas">
-   <button class:on={tela === 'montar'} onclick={() => irTela('montar')}><b>1</b>Montar{#if escolhidos}<small>{escolhidos}</small>{/if}</button>
-   <button class:on={tela === 'comprar'} disabled={!escolhidos} onclick={() => irTela('comprar')}><b>2</b>Comprar{#if escolhidos}<small>{contar(entradas).comprado}/{entradas.length}</small>{/if}</button>
+   <button class:on={tela === 'montar'} onclick={() => irTela('montar')}><b>1</b>Montar{@render selo(escolhidos, 'itens escolhidos')}</button>
+   <button class:on={tela === 'comprar'} disabled={!escolhidos} onclick={() => irTela('comprar')}><b>2</b>Comprar{@render selo(contar(entradas).pendente, 'pendentes')}</button>
    <button class:on={tela === 'fechar'} disabled={!escolhidos} onclick={() => irTela('fechar')}><b>3</b>Fechar</button>
-   <button class="mais" class:on={tela === 'catalogo' || tela === 'lojas' || tela === 'precos'} onclick={() => irTela(tela === 'catalogo' || tela === 'lojas' || tela === 'precos' ? 'montar' : 'catalogo')} aria-label="Catálogo, lojas e ajustes">⚙︎{#if autoPendentes}<i>{autoPendentes}</i>{/if}</button>
+   <button class="mais" class:on={tela === 'catalogo' || tela === 'lojas' || tela === 'precos'} onclick={() => irTela(tela === 'catalogo' || tela === 'lojas' || tela === 'precos' ? 'montar' : 'catalogo')} aria-label="Catálogo, lojas e ajustes">⚙︎{@render selo(autoPendentes, 'vínculos automáticos para conferir')}</button>
   </nav>
   <div class="cabeca">
    <div class="secoes" role="tablist" aria-label="Seção de compras">
     {#each SECOES as s (s.id)}
-     {@const n = entradasDaSecao(estado, s.id).length}
-     <button role="tab" aria-selected={secao === s.id} class:on={secao === s.id} onclick={() => trocarSecao(s.id)} title={s.nome}>{s.emoji} {s.curto}{#if n}<i>{n}</i>{/if}</button>
+     {@const n = new Set(entradasDaSecao(estado, s.id).map(x => x.itemId)).size}
+     <button role="tab" aria-selected={secao === s.id} class:on={secao === s.id} onclick={() => trocarSecao(s.id)} title={s.nome}><span class="rot-sec">{s.emoji} {s.curto}</span>{@render selo(n, 'itens na lista')}</button>
     {/each}
    </div>
    <button class="tema" onclick={alternarTema} aria-label={escuro ? 'Usar tema claro' : 'Usar tema escuro'} title={escuro ? 'Tema claro' : 'Tema escuro'}>{escuro ? '☀' : '☾'}</button>
@@ -835,12 +836,14 @@
  .curto{width:auto;margin-top:0;padding:10px 14px}
  .perigo{color:var(--er-t)!important}
  .row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
- .fixo{position:sticky;top:0;z-index:6;background:var(--fundo);margin:0 -2px;padding:8px 2px 6px;padding-top:calc(8px + env(safe-area-inset-top))}
- .cabeca{display:flex;gap:8px;align-items:stretch;margin-top:8px}
- .secoes{flex:1;display:flex;background:var(--f1);border-radius:12px;padding:4px;gap:4px;min-width:0}
- .secoes button{flex:1;border:0;background:transparent;border-radius:9px;padding:10px 6px;font-size:15px;font-weight:700;color:var(--tx2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+ .fixo{position:sticky;top:0;z-index:6;background:var(--fundo);margin:0 -2px;padding:12px 2px 6px;padding-top:calc(12px + env(safe-area-inset-top))}
+ .cabeca{display:flex;gap:8px;align-items:stretch;margin-top:12px}
+ .secoes{flex:1;display:flex;overflow:visible;background:var(--f1);border-radius:12px;padding:4px;gap:4px;min-width:0}
+ .secoes button{position:relative;flex:1;min-width:0;border:0;background:transparent;border-radius:9px;padding:10px 6px;font-size:15px;font-weight:700;color:var(--tx2);white-space:nowrap}
+ .rot-sec{display:block;overflow:hidden;text-overflow:ellipsis}
+ .passos button,.secoes button{position:relative}
+ .badge{position:absolute;top:-8px;right:-7px;z-index:1;display:grid;place-items:center;min-width:22px;height:22px;padding:0 6px;border-radius:11px;background:#ff3b30;color:#fff;font-size:13px;font-weight:700;line-height:1;font-variant-numeric:tabular-nums;border:2px solid var(--fundo);box-shadow:0 1px 3px #0003;pointer-events:none}
  .secoes button.on{background:var(--pri);color:#fff}
- .secoes i,.passos i{font-style:normal;font-size:12px;background:#d9a43a;color:#fff;border-radius:99px;padding:1px 6px;margin-left:5px}
  .sync{display:grid;justify-items:center;align-content:center;border:1px solid var(--bd);background:var(--sup);border-radius:12px;padding:4px 10px;font-size:20px;color:var(--pri);min-width:58px}
  .tema{flex:0 0 48px;border:1px solid var(--bd);background:var(--sup);border-radius:12px;font-size:21px;color:var(--tx2);padding:0}
  .sync span{font-size:12px;color:var(--tx3)}
@@ -849,11 +852,9 @@
  .passos{display:flex;gap:6px}
  .passos button{flex:1;display:flex;align-items:center;justify-content:center;gap:6px;border:1px solid var(--bd);background:var(--sup);border-radius:10px;padding:9px 4px;font-size:15px;font-weight:700;color:var(--tx2)}
  .passos button b{display:inline-grid;place-items:center;width:20px;height:20px;border-radius:50%;background:var(--f1);font-size:13px}
- .passos button small{font-size:12px;font-weight:600;color:var(--tx3)}
  .passos button.on:disabled{opacity:1}
  .passos button.on{border-color:var(--pri);background:var(--pri);color:#fff}
  .passos button.on b{background:var(--sup);color:var(--pri)}
- .passos button.on small{color:#cfe0d4}
  .passos .mais{flex:0 0 46px;font-size:19px}
  .sub{display:flex;gap:6px;margin-top:4px}
  .sub button{flex:1;border:0;border-bottom:2px solid transparent;background:transparent;padding:8px 2px;font-size:14px;font-weight:700;color:var(--tx3)}
