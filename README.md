@@ -21,6 +21,16 @@ função `public.compras_precos(token)`, que exige o token do aparelho. Na sincr
 vínculo recebem sugestão automática quando o nome bate sem ambiguidade (marcada “auto” até confirmar).
 O service worker guarda o app: listas e preços já baixados funcionam sem sinal.
 
+## Fichas técnicas (módulo 03)
+Registro da produção do dia contra a ficha técnica (`#/fichas`). O cozinheiro abre a receita e marca
+**Segui a ficha** (consumo e rendimento valem os da ficha) ou digita só o que foi diferente: a
+quantidade usada de cada ingrediente e o rendimento obtido, que é obrigatório quando algum
+ingrediente muda. "Quanto fez" escala a ficha em passos de meia receita. O botão **Enviar no
+WhatsApp** abre a conversa com o relatório pronto (valor usado, valor da ficha e variação).
+
+As receitas ficam em `src/lib/fichas/receitas.ts`, transcritas do documento "[THBF] Fichas Técnicas -
+2026"; a produção em andamento fica no IndexedDB do aparelho até ser substituída por uma nova.
+
 ## Desenvolvimento
 ```
 pnpm install

@@ -7,6 +7,7 @@
  import {buscarNomePorCnpj} from '../lib/cnpj-lookup';
  import {copiarTexto} from '../lib/clipboard';
  import Compras from '../lib/compras/Compras.svelte';
+ import Fichas from '../lib/fichas/Fichas.svelte';
 
  const CHAVE_FORMATO='thb.formato-copia'
  const CHAVE_SESSAO='thb.sessao.v2'
@@ -36,7 +37,7 @@
  let carregado=false
  let audio:AudioContext|undefined
  let mChave=$state('');let mNumero=$state('');let mFavorecido=$state('');let mCnpj=$state('');let mSerie=$state('');let mTotal=$state('');
- let view=$state<'capture'|'compras'|'pix'|'status'>('capture');
+ let view=$state<'capture'|'compras'|'fichas'|'pix'|'status'>('capture');
  let raw=$state('');let result=$state('');let error=$state('');let busy=$state(false);
  let key=$state('');let name=$state('');let city=$state('');let amount=$state('');let txid=$state('');
  let payload=$state('');let qr=$state('');let camera=$state(false);let video=$state<HTMLVideoElement>();
@@ -76,7 +77,7 @@
   try{const salvo=localStorage.getItem(CHAVE_FORMATO);if(FORMATOS.some(f=>f.id===salvo))formato=salvo as Formato}catch{/* mantém padrão */}
   try{const e=localStorage.getItem(CHAVE_ESPELHO);if(e!==null){espelhado=e==='1';prefEspelhoExplicita=true}}catch{/* mantém padrão */}
   const doLink=viewDoHash();
-  try{const v=doLink??localStorage.getItem('thb.view');if(v==='compras'||v==='pix'||v==='status'||v==='capture')view=v}catch{/* mantém padrão */}
+  try{const v=doLink??localStorage.getItem('thb.view');if(v==='compras'||v==='fichas'||v==='pix'||v==='status'||v==='capture')view=v}catch{/* mantém padrão */}
   if(!doLink)history.replaceState(null,'',location.pathname+location.search+'#/'+SLUG_VIEW[view]);
   requestAnimationFrame(()=>document.querySelector('nav .active')?.scrollIntoView({inline:'center',block:'nearest'}));
   window.addEventListener('hashchange',()=>{const v=viewDoHash();if(v&&v!==view)change(v,false)});
@@ -207,8 +208,8 @@
  function limpar(){if(!confirmarLimpeza){confirmarLimpeza=true;setTimeout(()=>confirmarLimpeza=false,3000);return}estado=ESTADO_VAZIO;notaAtivaId=undefined;raw='';copia='idle';confirmarLimpeza=false}
 
  function dataBr(iso:string){return iso.split('-').reverse().join('/')}
- /** Endereço único de cada módulo: #/captura, #/compras, #/pix, #/status (Compras completa com seção e etapa). */
- const SLUG_VIEW={capture:'captura',compras:'compras',pix:'pix',status:'status'} as const
+ /** Endereço único de cada módulo: #/captura, #/compras, #/fichas, #/pix, #/status (Compras completa com seção e etapa). */
+ const SLUG_VIEW={capture:'captura',compras:'compras',fichas:'fichas',pix:'pix',status:'status'} as const
  /** Módulo indicado no endereço, ou null se o hash não aponta para nenhum. */
  function viewDoHash():typeof view|null{const slug=location.hash.replace(/^#\/?/,'').split('/')[0];const par=Object.entries(SLUG_VIEW).find(([,v])=>v===slug);return par?par[0] as typeof view:null}
  function change(next:typeof view,gravarHash=true){stopCamera();view=next;try{localStorage.setItem('thb.view',next);if(gravarHash)history.replaceState(null,'',location.pathname+location.search+'#/'+SLUG_VIEW[next])}catch{/* não persiste */};raw='';result='';error='';payload='';qr='';copia='idle';}
@@ -257,14 +258,16 @@
  }catch(e){error=e instanceof Error?e.message:'Falha ao gerar.';}finally{busy=false;}}
 </script>
 <svelte:head><title>THB Financeiro · Prévia local</title><meta name="description" content="Captura e conferência local de documentos financeiros. Ambiente de desenvolvimento."/></svelte:head>
-<div class="app" class:compacto={view==='compras'}>
+<div class="app" class:compacto={view==='compras'||view==='fichas'}>
  <aside><div class="brand">THB<span>FINANCEIRO</span></div><div class="workspace">Ambiente local<span>Sem conexão bancária</span></div>
- <nav aria-label="Módulos"><button class:active={view==='capture'} onclick={()=>change('capture')}>01 <span>Capturar documento</span></button><button class:active={view==='compras'} onclick={()=>change('compras')}>02 <span>Compras da semana</span></button><button class:active={view==='pix'} onclick={()=>change('pix')}>03 <span>QR Code Pix</span></button><button class:active={view==='status'} onclick={()=>change('status')}>04 <span>Etapas do projeto</span></button></nav>
+ <nav aria-label="Módulos"><button class:active={view==='capture'} onclick={()=>change('capture')}>01 <span>Capturar documento</span></button><button class:active={view==='compras'} onclick={()=>change('compras')}>02 <span>Compras da semana</span></button><button class:active={view==='fichas'} onclick={()=>change('fichas')}>03 <span>Fichas técnicas</span></button><button class:active={view==='pix'} onclick={()=>change('pix')}>04 <span>QR Code Pix</span></button><button class:active={view==='status'} onclick={()=>change('status')}>05 <span>Etapas do projeto</span></button></nav>
  <p class="side-note">Boleto e nota fiscal, juntos.<br/>Pronto para colar na planilha.</p></aside>
  <main><header><span>THB / Ferramentas de conferência</span><strong>PRÉVIA · 0.3</strong></header>
- {#if view!=='compras'}<div class="notice">Ambiente de desenvolvimento. Use dados de teste. Pagamentos, remessas e aprovações operacionais estão desabilitados.</div>{/if}
+ {#if view!=='compras'&&view!=='fichas'}<div class="notice">Ambiente de desenvolvimento. Use dados de teste. Pagamentos, remessas e aprovações operacionais estão desabilitados.</div>{/if}
  {#if view==='compras'}
  <Compras/>
+ {:else if view==='fichas'}
+ <Fichas/>
  {:else if view==='capture'}
  <section class="intro"><p class="eyebrow">ENTRADA DE DOCUMENTOS</p><h1>Boletos e notas na mesma leitura.</h1><p>Leia a DANFE e os boletos em qualquer ordem. O app associa cada boleto à sua nota e monta as linhas da planilha.</p></section>
  <div class="grid lote"><section class="card"><div class="card-heading"><span class="step">01</span><h2>Ler documentos</h2></div><p>Boletos (ITF), contas, Pix (QR) e o código da DANFE (Code128) são detectados sozinhos. A câmera fica aberta: passe um documento depois do outro.</p>

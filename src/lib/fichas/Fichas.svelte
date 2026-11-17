@@ -1,0 +1,350 @@
+<script lang="ts">
+ import {onDestroy, onMount, tick} from 'svelte'
+ import {RECEITAS, type Receita, type Ingrediente} from './receitas.ts'
+ import {
+  LOJAS, FATOR_MIN, producaoVazia, revisar, loteDe, alternarFicha, definirUsado, definirRendimento, definirFator, definirObs,
+  removerLote, situacao, diferencas, contar, lotesOrdenados, relatorio, linkWhatsApp, referencia, rendimentoFicha, formatar,
+  lerCampo, textoCampo, casas, pct, dataBr, type Producao, type Situacao
+ } from './estado.ts'
+ import {ler, gravar, pedirPersistencia} from '../compras/armazenamento.ts'
+ import {rotulo, type Unidade} from '../compras/unidades.ts'
+ import {normalizar} from '../compras/estado.ts'
+ import {copiarTexto} from '../clipboard'
+ import {temaInicial, aplicarTema, lembrarTema, entrarModoApp} from '../tema.ts'
+
+ const CHAVE_ESTADO = 'fichas'
+ const CHAVE_WHATS = 'thb.fichas.whats'
+ const ROTULO: Record<Situacao, string> = {conforme: '✅ ficha', alterada: '✏️ alterada', incompleta: '⚠️ falta rendimento'}
+
+ let producao = $state<Producao>(producaoVazia(hoje()))
+ let carregado = $state(false)
+ let emDisco = $state(true)
+ let aberta = $state('')
+ let busca = $state('')
+ let soFeitas = $state(false)
+ let aviso = $state('')
+ let copiado = $state(false)
+ let confirmar = $state('')
+ let whats = $state('')
+ let escuro = $state(false)
+ let digitando = $state(false)
+ let sairModoApp: (() => void) | undefined
+
+ const contagem = $derived(contar(producao, RECEITAS))
+ const feitas = $derived(producao.lotes.length)
+ const visiveis = $derived.by(() => {
+  const q = normalizar(busca)
+  return RECEITAS.filter(r => (!q || normalizar(r.nome).includes(q)) && (!soFeitas || loteDe(producao, r.id)))
+ })
+ const mensagem = $derived(relatorio(producao, RECEITAS))
+ const atrasada = $derived(carregado && producao.data !== hoje() && feitas > 0)
+
+ onMount(async () => {
+  sairModoApp = entrarModoApp()
+  escuro = temaInicial(); aplicarTema(escuro)
+  try {whats = localStorage.getItem(CHAVE_WHATS) ?? ''} catch {/* sem localStorage */}
+  const salvo = revisar(await ler<unknown>(CHAVE_ESTADO), RECEITAS, hoje())
+  // Produção antiga e vazia não interessa: o dia passa a ser hoje.
+  producao = salvo.lotes.length ? salvo : {...salvo, data: hoje()}
+  carregado = true
+  void pedirPersistencia()
+ })
+ onDestroy(() => sairModoApp?.())
+
+ $effect(() => {
+  const copia = $state.snapshot(producao)
+  if (!carregado) return
+  void gravar(CHAVE_ESTADO, copia).then(ok => {emDisco = ok})
+ })
+
+ /** Dia de hoje no fuso do aparelho, AAAA-MM-DD. */
+ function hoje(): string {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+ }
+ function avisar(t: string) {aviso = t; setTimeout(() => {if (aviso === t) aviso = ''}, 3200)}
+ function vibrar(p: number | number[]) {try {navigator.vibrate?.(p)} catch {/* sem haptics */}}
+ function alternarTema() {escuro = !escuro; aplicarTema(escuro); lembrarTema(escuro)}
+ function confirmarDuasVezes(k: string, acao: () => void) {
+  if (confirmar !== k) {confirmar = k; setTimeout(() => {if (confirmar === k) confirmar = ''}, 3000); return}
+  confirmar = ''; acao()
+ }
+
+ async function abrir(id: string) {
+  aberta = aberta === id ? '' : id
+  if (!aberta) return
+  await tick()
+  document.getElementById(`ficha-${id}`)?.scrollIntoView({block: 'nearest', behavior: 'smooth'})
+ }
+ function seguiu(r: Receita) {producao = alternarFicha(producao, r.id); vibrar(30)}
+ function passoFator(r: Receita, d: number) {producao = definirFator(producao, r.id, (loteDe(producao, r.id)?.fator ?? 1) + d); vibrar(10)}
+ function fatorTexto(f: number) {return `${f.toLocaleString('pt-BR')} ${f > 1 ? 'receitas' : 'receita'}`}
+
+ /**
+  * Filtra a digitação: kg, L e unidade aceitam vírgula e as casas da unidade; g e ml só dígitos.
+  * @param el campo
+  * @param u unidade do campo
+  */
+ function filtrar(el: HTMLInputElement, u: Unidade) {
+  const n = casas(u)
+  let v = el.value.replace('.', ',')
+  if (n) {
+   v = v.replace(/[^\d,]/g, '')
+   const [int, ...dec] = v.split(',')
+   v = dec.length ? `${int},${dec.join('').slice(0, n)}` : int
+  } else v = v.replace(/\D/g, '')
+  v = v.slice(0, 8)
+  if (v !== el.value) el.value = v
+ }
+ function digitarUsado(r: Receita, i: Ingrediente, el: HTMLInputElement) {
+  const n = lerCampo(el.value, i.unidade)
+  producao = definirUsado(producao, r.id, i.id, n)
+  el.value = textoCampo(n)
+ }
+ function digitarRendimento(r: Receita, el: HTMLInputElement) {
+  const n = lerCampo(el.value, r.rendimento.unidade)
+  producao = definirRendimento(producao, r.id, n)
+  el.value = textoCampo(n || undefined)
+ }
+ function modoTeclado(u: Unidade) {return casas(u) ? 'decimal' : 'numeric'}
+
+ /** Primeira receita alterada sem rendimento: o envio para nela. */
+ function pendente(): Receita | undefined {
+  return lotesOrdenados(producao, RECEITAS).find(x => situacao(x.receita, x.lote) === 'incompleta')?.receita
+ }
+ function validar(): boolean {
+  if (!feitas) {avisar('Registre pelo menos uma receita.'); return false}
+  const p = pendente()
+  if (!p) return true
+  busca = ''; soFeitas = false; aberta = p.id
+  avisar(`Informe o rendimento de ${p.nome}.`)
+  void tick().then(() => document.getElementById(`rend-${p.id}`)?.focus())
+  return false
+ }
+ function enviar() {
+  if (!validar()) return
+  const url = linkWhatsApp(mensagem, whats)
+  if (!window.open(url, '_blank')) location.href = url
+ }
+ async function copiar() {
+  if (!validar()) return
+  if (await copiarTexto(mensagem)) {copiado = true; vibrar(40); setTimeout(() => {copiado = false}, 1800)}
+  else avisar('O navegador bloqueou a cópia. Use Enviar no WhatsApp.')
+ }
+ function novaProducao() {
+  confirmarDuasVezes('nova', () => {
+   producao = producaoVazia(hoje(), producao.loja, producao.cozinheiro)
+   aberta = ''; soFeitas = false; window.scrollTo({top: 0})
+   avisar('Produção nova, em branco.')
+  })
+ }
+ function salvarWhats(v: string) {
+  whats = v.replace(/[^\d+ ()-]/g, '').slice(0, 20)
+  try {localStorage.setItem(CHAVE_WHATS, whats)} catch {/* não persiste */}
+ }
+ function aoFocar(e: FocusEvent) {if ((e.target as HTMLElement).matches('input:not([type=checkbox])')) digitando = true}
+ function aoDesfocar() {setTimeout(() => {if (!document.activeElement?.matches('input:not([type=checkbox])')) digitando = false}, 200)}
+</script>
+
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<div class="fichas" class:digitando onfocusin={aoFocar} onfocusout={aoDesfocar}>
+ <div class="topo">
+  <div class="cabeca">
+   <div class="titulo"><p class="eyebrow">PRODUÇÃO · FICHAS TÉCNICAS</p><h1>O que foi feito hoje</h1></div>
+   <button class="tema" aria-label={escuro ? 'Usar tema claro' : 'Usar tema escuro'} onclick={alternarTema}>{escuro ? '☀' : '☾'}</button>
+  </div>
+  <div class="dados">
+   <div class="lojas" role="group" aria-label="Loja">
+    {#each LOJAS as l (l)}<button class:on={producao.loja === l} aria-pressed={producao.loja === l} onclick={() => {producao = {...producao, loja: l}}}>{l}</button>{/each}
+   </div>
+   <input type="date" aria-label="Dia da produção" value={producao.data} max={hoje()} onchange={(e) => {if (e.currentTarget.value) producao = {...producao, data: e.currentTarget.value}}}/>
+   <input class="quem" aria-label="Cozinheiro" placeholder="Seu nome" maxlength="40" autocomplete="name" value={producao.cozinheiro} onchange={(e) => {producao = {...producao, cozinheiro: e.currentTarget.value.trim()}}}/>
+  </div>
+ </div>
+ <div class="fixo">
+  <div class="busca">
+   <input type="search" placeholder="Buscar receita" aria-label="Buscar receita" bind:value={busca}/>
+   <button class="filtro" class:on={soFeitas} aria-pressed={soFeitas} onclick={() => {soFeitas = !soFeitas}}>Feitas{#if feitas}<span class="badge">{feitas}</span>{/if}</button>
+  </div>
+ </div>
+
+ {#if !emDisco}<p class="alerta">Este navegador não está guardando os dados. Envie antes de fechar a página.</p>{/if}
+ {#if atrasada}<p class="alerta">Esta produção é de <b>{dataBr(producao.data)}</b>. Envie-a, ou comece a de hoje em “Nova produção”, no fim da página.</p>{/if}
+ <p class="lead">Toque na receita. Se fez igual à ficha, marque <b>Segui a ficha</b>. Se algo foi diferente, digite só o que mudou e o rendimento que deu.</p>
+
+ {#each visiveis as r (r.id)}
+  {@const lote = loteDe(producao, r.id)}
+  {@const sit = lote ? situacao(r, lote) : undefined}
+  {@const fator = lote?.fator ?? 1}
+  {@const difs = lote ? new Map(diferencas(r, lote).map(d => [d.ingrediente.id, d])) : new Map()}
+  {@const rendRef = rendimentoFicha(r, fator)}
+  <article class="ficha" class:aberta={aberta === r.id} class:st-conforme={sit === 'conforme'} class:st-alterada={sit === 'alterada'} class:st-incompleta={sit === 'incompleta'} id="ficha-{r.id}">
+   <button class="cab" aria-expanded={aberta === r.id} onclick={() => abrir(r.id)}>
+    <span class="num">{r.numero}</span>
+    <span class="nome">{r.nome}</span>
+    {#if sit}<span class="selo s-{sit}">{ROTULO[sit]}{#if fator !== 1}{` ×${fator.toLocaleString('pt-BR')}`}{/if}</span>
+    {:else}<span class="rend-ficha">{formatar(r.rendimento.qtd, r.rendimento.unidade)}</span>{/if}
+   </button>
+   {#if aberta === r.id}
+    <div class="corpo">
+     <div class="fator">
+      <span>Quanto fez</span>
+      <div class="stp">
+       <button aria-label="Meia receita a menos" disabled={fator <= FATOR_MIN} onclick={() => passoFator(r, -0.5)}>−</button>
+       <b>{fatorTexto(fator)}</b>
+       <button aria-label="Meia receita a mais" onclick={() => passoFator(r, 0.5)}>+</button>
+      </div>
+     </div>
+     <button class="seguiu" class:on={lote?.modo === 'ficha'} aria-pressed={lote?.modo === 'ficha'} onclick={() => seguiu(r)}>
+      {lote?.modo === 'ficha' ? '✓ Segui a ficha' : 'Segui a ficha'}
+      <small>{lote?.modo === 'ficha' ? `rendimento ${formatar(rendRef, r.rendimento.unidade)}` : 'mesmos ingredientes e mesmo rendimento'}</small>
+     </button>
+     <p class="rotulo">Ou digite o que foi diferente <small>· em branco = igual à ficha</small></p>
+     <div class="tabela">
+      {#each r.ingredientes as i (i.id)}
+       {@const ref = referencia(i, fator)}
+       {@const d = difs.get(i.id)}
+       <label class="linha" class:mudou={!!d}>
+        <span class="ing">
+         <span class="t">{i.nome}</span>
+         <small>ficha {formatar(ref, i.unidade)}{#if i.obs && fator === 1}{' · '}{i.obs}{/if}{#if d}{' · '}<b class:mais={d.variacao > 0} class:menos={d.variacao < 0}>{pct(d.variacao)}</b>{/if}</small>
+        </span>
+        <span class="campo">
+         <input inputmode={modoTeclado(i.unidade)} enterkeyhint="next" autocomplete="off" placeholder={textoCampo(ref)} aria-label="{i.nome}, quantidade usada em {rotulo(i.unidade)}"
+          value={textoCampo(lote?.usados[i.id])} oninput={(e) => filtrar(e.currentTarget, i.unidade)} onchange={(e) => digitarUsado(r, i, e.currentTarget)}/>
+         <span class="un">{rotulo(i.unidade)}</span>
+        </span>
+       </label>
+      {/each}
+      <label class="linha rend" class:mudou={sit === 'alterada' && lote?.rendimento !== rendRef} class:falta={sit === 'incompleta'}>
+       <span class="ing">
+        <span class="t">Rendimento</span>
+        <small>ficha {formatar(rendRef, r.rendimento.unidade)}{#if sit === 'incompleta'}{' · '}<b class="menos">informe quanto rendeu</b>{:else if lote?.rendimento && lote.rendimento !== rendRef}{' · '}<b class:mais={lote.rendimento > rendRef} class:menos={lote.rendimento < rendRef}>{pct((lote.rendimento - rendRef) / rendRef)}</b>{/if}</small>
+       </span>
+       <span class="campo">
+        <input id="rend-{r.id}" inputmode={modoTeclado(r.rendimento.unidade)} enterkeyhint="done" autocomplete="off" placeholder={textoCampo(rendRef)} aria-label="Rendimento obtido em {rotulo(r.rendimento.unidade)}"
+         value={textoCampo(lote?.rendimento)} oninput={(e) => filtrar(e.currentTarget, r.rendimento.unidade)} onchange={(e) => digitarRendimento(r, e.currentTarget)}/>
+        <span class="un">{rotulo(r.rendimento.unidade)}</span>
+       </span>
+      </label>
+     </div>
+     <input class="obs" placeholder="Observação (opcional): por que mudou?" maxlength="200" aria-label="Observação" value={lote?.obs ?? ''} onchange={(e) => {producao = definirObs(producao, r.id, e.currentTarget.value)}}/>
+     {#if lote}<button class="link perigo" onclick={() => {producao = removerLote(producao, r.id)}}>tirar esta receita da produção</button>{/if}
+    </div>
+   {/if}
+  </article>
+ {:else}
+  <p class="vazio-curto">{soFeitas && !busca ? 'Nenhuma receita registrada ainda.' : 'Nenhuma receita com esse nome.'} <button class="link" onclick={() => {busca = ''; soFeitas = false}}>mostrar todas</button></p>
+ {/each}
+
+ <details class="bloco">
+  <summary>Ver a mensagem que será enviada</summary>
+  <pre>{mensagem}</pre>
+ </details>
+ <details class="bloco">
+  <summary>Ajustes</summary>
+  <label for="whats">WhatsApp de destino <small>(com 55 e DDD; em branco, você escolhe o contato)</small></label>
+  <input id="whats" inputmode="tel" placeholder="55 21 90000-0000" value={whats} onchange={(e) => salvarWhats(e.currentTarget.value)}/>
+  <button class="secondary perigo" onclick={novaProducao}>{confirmar === 'nova' ? 'Toque de novo para apagar tudo' : 'Nova produção (apaga o que está na tela)'}</button>
+ </details>
+
+ <div class="barra">
+  <button class="secondary" onclick={copiar}>{copiado ? 'Copiado ✓' : '📋 Copiar'}</button>
+  <button class="primary" onclick={enviar}>Enviar no WhatsApp{#if feitas}{` (${feitas})`}{/if}</button>
+ </div>
+ {#if aviso}<div class="toast" role="status">{aviso}</div>{/if}
+</div>
+
+<style>
+ .fichas{--sup:#fff;--fundo:#f5f4ef;--fundo-t:#f5f4efee;--pri:#193f35;--tx:#10251f;--tx2:#45594f;--tx3:#65766f;--bd:#c7d2c8;--bd2:#eef1ec;--f1:#eef2ec;--ok-f:#e7f3ea;--ok-b:#9fc7ad;--er-f:#f8e5e0;--er-b:#e3b9ae;--er-t:#8f3e2c;--av-f:#fcf3dc;--av-b:#e7c98e;--av-t:#7a5a1d;--az-t:#2f6f9f;--v:#1f6a43;--r:#b83d3d;max-width:760px;padding-bottom:96px;color:var(--tx)}
+ :global(html[data-tema='escuro']) .fichas{--sup:#17211d;--fundo:#0e1512;--fundo-t:#0e1512ee;--pri:#2f8462;--tx:#e6eee9;--tx2:#bccbc2;--tx3:#8fa198;--bd:#33443c;--bd2:#222e29;--f1:#1f2b26;--ok-f:#173326;--ok-b:#2f6b4b;--er-f:#3a1f1b;--er-b:#7a3a2f;--er-t:#f0a493;--av-f:#33280f;--av-b:#7a6127;--av-t:#e8c57c;--az-t:#8cc0ea;--v:#4cb57d;--r:#e0706a;color-scheme:dark}
+ :global(html.modo-app),:global(html.modo-app body){overflow-x:clip;overscroll-behavior-x:none;max-width:100%;-webkit-text-size-adjust:100%}
+ :global(html[data-tema='escuro']),:global(html[data-tema='escuro'] body),:global(html[data-tema='escuro'] .app),:global(html[data-tema='escuro'] main){background:#0e1512!important;color:#e6eee9}
+ :global(html[data-tema='escuro'] aside){background:#0b110f!important;border-color:#222e29!important}
+ .fichas :is(button,input){-webkit-tap-highlight-color:transparent}
+ button{font:inherit;cursor:pointer;color:inherit}
+ button:disabled{opacity:.3;cursor:default}
+ input{width:100%;min-width:0;border:1px solid var(--bd);border-radius:8px;padding:10px 12px;background:var(--sup);color:var(--tx);font-size:17px}
+ .eyebrow{font-size:12px;font-weight:700;letter-spacing:2px;color:var(--tx3);margin:0}
+ h1{font-size:22px;font-weight:650;letter-spacing:-.4px;line-height:1.2;margin:2px 0 0;color:var(--tx)}
+ .lead{font-size:15px;line-height:1.5;color:var(--tx2);margin:12px 0}
+ .alerta{font-size:14px;line-height:1.45;color:var(--av-t);background:var(--av-f);border:1px solid var(--av-b);border-radius:8px;padding:9px 12px;margin:10px 0 0}
+ .topo{padding-top:12px}
+ .fixo{position:sticky;top:0;z-index:6;background:var(--fundo);margin:0 -2px;padding:8px 2px;padding-top:calc(8px + env(safe-area-inset-top));border-bottom:1px solid var(--bd2)}
+ .cabeca{display:flex;gap:8px;align-items:center}
+ .titulo{flex:1;min-width:0}
+ .tema{flex:0 0 46px;height:46px;border:1px solid var(--bd);background:var(--sup);border-radius:12px;font-size:21px;color:var(--tx2);padding:0}
+ .dados{display:grid;grid-template-columns:auto minmax(0,1fr) minmax(0,1fr);gap:8px;margin-top:10px}
+ .dados input{padding:9px 10px;font-size:16px}
+ .lojas{display:flex;background:var(--f1);border-radius:10px;padding:3px;gap:3px}
+ .lojas button{border:0;background:transparent;border-radius:8px;padding:8px 10px;font-size:14px;font-weight:800;color:var(--tx2)}
+ .lojas button.on{background:var(--pri);color:#fff}
+ .busca{display:flex;gap:8px}
+ .busca input{flex:1}
+ .filtro{position:relative;flex:0 0 auto;border:1px solid var(--bd);background:var(--sup);border-radius:8px;padding:0 14px;font-size:15px;font-weight:600}
+ .filtro.on{background:var(--pri);color:#fff;border-color:var(--pri)}
+ .badge{position:absolute;top:-8px;right:-7px;display:grid;place-items:center;min-width:22px;height:22px;padding:0 6px;border-radius:11px;background:#ff3b30;color:#fff;font-size:13px;font-weight:700;line-height:1;border:2px solid var(--fundo);pointer-events:none}
+ .ficha{background:var(--sup);border:1px solid var(--bd);border-radius:12px;margin-bottom:8px;scroll-margin-top:76px;transition:border-color .2s,background .2s}
+ .ficha.aberta{box-shadow:0 2px 10px #0001}
+ .ficha.st-conforme{border-color:var(--ok-b);background:var(--ok-f)}
+ .ficha.st-alterada{border-color:var(--av-b);background:var(--av-f)}
+ .ficha.st-incompleta{border-color:var(--er-b);background:var(--er-f)}
+ .cab{display:flex;align-items:center;gap:10px;width:100%;min-height:56px;border:0;background:transparent;text-align:left;padding:8px 12px}
+ .num{flex:0 0 30px;height:30px;display:grid;place-items:center;border-radius:50%;background:var(--f1);font-size:13px;font-weight:700;color:var(--tx2);font-variant-numeric:tabular-nums}
+ .nome{flex:1;min-width:0;font-size:17px;font-weight:650;line-height:1.25}
+ .rend-ficha{font-size:13px;color:var(--tx3);white-space:nowrap;font-variant-numeric:tabular-nums}
+ .selo{font-size:13px;font-weight:800;border-radius:99px;padding:3px 9px;white-space:nowrap}
+ .s-conforme{color:var(--v)} .s-alterada{color:var(--av-t)} .s-incompleta{color:var(--er-t)}
+ .corpo{padding:2px 12px 12px;border-top:1px solid var(--bd2)}
+ .fator{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:10px;font-size:15px;font-weight:600;color:var(--tx2)}
+ .stp{display:grid;grid-template-columns:46px minmax(104px,auto) 46px;align-items:center;border:1px solid var(--bd);border-radius:10px;background:var(--sup);height:44px;overflow:hidden}
+ .stp button{height:100%;border:0;background:transparent;font-size:22px;font-weight:600;line-height:1;color:var(--tx2);touch-action:manipulation}
+ .stp button:active:not(:disabled){background:var(--f1)}
+ .stp b{text-align:center;font-size:15px;font-variant-numeric:tabular-nums}
+ .seguiu{display:grid;gap:2px;width:100%;margin-top:10px;padding:12px 14px;border-radius:10px;border:1px solid var(--pri);background:var(--sup);color:var(--pri);font-size:17px;font-weight:700}
+ .seguiu small{font-size:13px;font-weight:500;color:var(--tx3)}
+ .seguiu.on{background:var(--pri);color:#fff}
+ .seguiu.on small{color:#fffc}
+ .rotulo{font-size:14px;font-weight:700;margin:16px 0 8px;color:var(--tx)}
+ .rotulo small{font-weight:400;color:var(--tx3)}
+ .tabela{background:var(--sup);border:1px solid var(--bd);border-radius:12px;overflow:hidden}
+ .linha{display:flex;align-items:center;gap:10px;padding:8px 10px;border-top:1px solid var(--bd2);min-height:56px;margin:0;transition:background .2s}
+ .linha:first-child{border-top:0}
+ .linha.mudou{background:var(--av-f)}
+ .linha.rend{border-top:2px solid var(--bd);background:var(--f1)}
+ .linha.rend.mudou{background:var(--av-f)}
+ .linha.rend.falta{background:var(--er-f)}
+ .ing{flex:1;min-width:0;display:grid;gap:1px}
+ .t{font-size:16px;font-weight:600;color:var(--tx);line-height:1.25}
+ .rend .t{font-weight:800}
+ .ing small{font-size:13px;color:var(--tx3);font-variant-numeric:tabular-nums}
+ .mais{color:var(--r)} .menos{color:var(--az-t)}
+ .rend .menos,.rend .mais{color:var(--er-t)}
+ .campo{flex:0 0 132px;display:grid;grid-template-columns:minmax(0,1fr) 30px;align-items:center;border:1px solid var(--bd);border-radius:9px;background:var(--sup);height:44px;overflow:hidden}
+ .campo:focus-within{border-color:var(--pri);box-shadow:0 0 0 1px var(--pri) inset}
+ .campo input{height:100%;border:0;border-radius:0;padding:0 4px 0 8px;text-align:right;font-size:17px;font-weight:700;background:transparent;font-variant-numeric:tabular-nums}
+ .campo input::placeholder{color:var(--tx3);font-weight:500;opacity:.55}
+ .campo input:focus{outline:none}
+ .campo .un{font-size:13px;font-weight:700;color:var(--tx3)}
+ .obs{margin-top:10px;font-size:16px}
+ .link{border:0;background:transparent;color:var(--az-t);text-decoration:underline;font-size:14px;padding:10px 0 0}
+ .perigo{color:var(--er-t)!important}
+ .vazio-curto{font-size:15px;color:var(--tx3);text-align:center;padding:18px 0}
+ .bloco{background:var(--sup);border:1px solid var(--bd);border-radius:12px;padding:12px 14px;margin-top:10px}
+ .bloco summary{font-size:15px;font-weight:600;cursor:pointer;color:var(--tx2)}
+ .bloco pre{white-space:pre-wrap;overflow-wrap:anywhere;font:14px/1.5 ui-monospace,"SF Mono",Menlo,Consolas,monospace;color:var(--tx);margin:10px 0 0}
+ .bloco label{display:block;margin:12px 0 6px;font-size:14px;font-weight:600}
+ .bloco label small{font-weight:400;color:var(--tx3)}
+ .primary,.secondary{padding:13px 16px;border-radius:9px;font-size:16px;font-weight:600;width:100%}
+ .primary{background:var(--pri);color:#fff;border:1px solid var(--pri)}
+ .secondary{background:var(--sup);color:var(--pri);border:1px solid var(--bd)}
+ .bloco .secondary{margin-top:12px}
+ .barra{position:fixed;left:0;right:0;bottom:0;z-index:15;display:flex;gap:8px;padding:10px 14px calc(10px + env(safe-area-inset-bottom));background:var(--fundo-t);backdrop-filter:blur(6px);border-top:1px solid var(--bd)}
+ .barra .secondary{flex:0 0 auto;width:auto}
+ .barra .primary{flex:1}
+ .digitando .barra{display:none}
+ @media(min-width:901px){.barra{left:250px}}
+ .toast{position:fixed;left:50%;bottom:84px;transform:translateX(-50%);background:#0b1a15;color:#fff;border-radius:99px;padding:10px 18px;font-size:15px;z-index:20;box-shadow:0 6px 20px #0003;max-width:90vw;text-align:center}
+ :global(html[data-tema='escuro']) .toast{background:#e6eee9;color:#0e1512}
+ @media(max-width:420px){.campo{flex-basis:118px}.dados{grid-template-columns:auto minmax(0,1fr)}.dados .quem{grid-column:1/-1}}
+</style>
