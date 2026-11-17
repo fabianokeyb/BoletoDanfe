@@ -24,8 +24,11 @@ O service worker guarda o app: listas e preços já baixados funcionam sem sinal
 ## Fichas técnicas (módulo 03)
 Registro da produção contra a ficha técnica (`#/fichas`). Por receita, o cozinheiro marca **Segui a
 ficha** ou digita só o que foi diferente, **pesa o rendimento** (obrigatório sempre) e toca em
-**Finalizar receita**. "Quanto fez" escala a ficha em meias receitas; "Fazer outro lote" registra
-mais de um lote no dia; "corrigir" reabre um lote finalizado.
+**Finalizar receita**. Só funcionários autorizados (`src/lib/fichas/funcionarios.ts`) finalizam.
+Quantas receitas foram feitas é calculado, não perguntado: mediana das proporções usado/ficha,
+ponderada pela raiz do peso de cada ingrediente; ingredientes fora dessa proporção (>3%) aparecem
+como alteração, e o rendimento é comparado com ficha × receitas feitas. "Fazer outro lote" registra
+mais de um lote no dia; "corrigir" reabre um lote finalizado. Lojas: Freguesia (THBF) e Tijuca (THBT).
 
 Dados: cada mudança é gravada na hora no IndexedDB do aparelho (bateria acabando não perde nada).
 Lote finalizado entra numa fila e sobe para o Supabase pela função `public.fichas_registrar(token, lote)`

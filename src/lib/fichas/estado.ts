@@ -7,9 +7,12 @@
  * reenviar (sinal caiu no meio, correção depois) atualiza o mesmo registro em vez de duplicar.
  *
  * O peso final (rendimento) é obrigatório para finalizar: é o único número que dá para conferir.
+ *
+ * Quantas receitas foram feitas não é perguntado: é calculado pelos ingredientes (ver fatorDe).
  */
 import {rotulo, type Unidade} from '../compras/unidades.ts'
 import type {Receita, Ingrediente} from './receitas.ts'
+import {autorizado} from './funcionarios.ts'
 
 export type Modo = 'ficha' | 'alterada'
 
@@ -17,11 +20,9 @@ export interface Lote {
   /** UUID gerado no aparelho; chave primária no Supabase. */
   id: string
   receitaId: string
-  /** 'ficha' = ingredientes iguais aos da ficha (o rendimento continua sendo pesado). */
+  /** 'ficha' = exatamente 1 receita da ficha (o rendimento continua sendo pesado). */
   modo: Modo
-  /** Quantas receitas foram feitas de uma vez (0,5 = meia receita). Escala a referência da ficha. */
-  fator: number
-  /** Quantidade total realmente usada, por id do ingrediente; ausente = igual à ficha. */
+  /** Quantidade total realmente usada, por id do ingrediente; ausente = a da ficha (1 receita). */
   usados: Record<string, number>
   /** Peso/volume final obtido, na unidade da ficha. */
   rendimento?: number
@@ -49,9 +50,10 @@ export type Situacao = 'conforme' | 'alterada' | 'incompleta'
 
 export interface Diferenca {
   ingrediente: Ingrediente
-  ficha: number
+  /** Ficha × receitas feitas. */
+  esperado: number
   usado: number
-  /** Variação relativa à ficha: 0,1 = 10% a mais. */
+  /** Variação relativa ao esperado: 0,1 = 10% a mais. */
   variacao: number
 }
 
@@ -63,20 +65,26 @@ export interface Pacote {
   cozinheiro: string
   receitaId: string
   receitaNome: string
+  /** Receitas feitas, calculado. */
   fator: number
   seguiuFicha: boolean
+  /** Rendimento da ficha para 1 receita. */
   rendimentoFicha: number
   rendimento: number
   unidade: Unidade
   obs: string
   iniciadoEm: number
   finalizadoEm: number
+  /** ficha = quantidade para 1 receita. */
   ingredientes: {id: string, nome: string, unidade: Unidade, ficha: number, usado: number}[]
 }
 
+/** Código da loja (gravado) e nome exibido. */
 export const LOJAS = ['THBF', 'THBT'] as const
-export const FATOR_MIN = 0.5
-export const FATOR_MAX = 20
+export const NOME_LOJA: Record<string, string> = {THBF: 'Freguesia', THBT: 'Tijuca'}
+
+/** Desvio tolerado entre usado e esperado antes de contar como fora da proporção. */
+export const TOLERANCIA = 0.03
 
 /** Gerador de ids; trocado nos testes. */
 export type GeradorId = () => string
@@ -159,6 +167,58 @@ export function finalizadosDe(p: Producao, receitaId: string): Lote[] {
 }
 
 /**
+ * Peso aproximado em gramas, usado só para ponderar a proporção: 1 ml conta como 1 g.
+ * Unidades (ovo, limão, cebola) não têm peso conhecido e ficam de fora (peso 0).
+ * @param q quantidade
+ * @param u unidade
+ */
+function gramas(q: number, u: Unidade): number {
+  return u === 'kg' || u === 'l' ? q * 1000 : u === 'un' ? 0 : q
+}
+
+/**
+ * Receitas feitas, calculadas pelos ingredientes: a mediana das proporções usado/ficha,
+ * ponderada pela raiz quadrada do peso de cada ingrediente na ficha.
+ *
+ * A mediana ignora o ingrediente que saiu da proporção: na Calabrese com 1,5 kg de calabresa e o
+ * resto igual à ficha, dá 1 receita e a calabresa aparece +21,6%. Seguir o ingrediente mais
+ * alterado daria 1,22 receita e acusaria todo o resto de faltar 18%; a média ponderada daria 1,05.
+ * A raiz do peso evita os dois extremos: com o peso puro, a maionese (59% da Calabrese) decidiria
+ * sozinha; com peso igual, 10 g de orégano valeriam o mesmo que 3 kg de maionese.
+ * @param r receita
+ * @param l lote
+ * @returns receitas feitas, 3 casas; 1 quando seguiu a ficha ou não há o que medir
+ */
+export function fatorDe(r: Receita, l: Pick<Lote, 'modo' | 'usados'>): number {
+  if (l.modo === 'ficha') return 1
+  const pontos = r.ingredientes.filter(i => i.qtd > 0).map(i => ({razao: (l.usados[i.id] ?? i.qtd) / i.qtd, peso: Math.sqrt(gramas(i.qtd, i.unidade))}))
+  const comPeso = pontos.some(x => x.peso > 0) ? pontos.filter(x => x.peso > 0) : pontos.map(x => ({...x, peso: 1}))
+  if (!comPeso.length) return 1
+  comPeso.sort((a, b) => a.razao - b.razao)
+  const metade = comPeso.reduce((s, x) => s + x.peso, 0) / 2
+  let acumulado = 0
+  for (let k = 0; k < comPeso.length; k++) {
+    acumulado += comPeso[k].peso
+    if (Math.abs(acumulado - metade) < 1e-9 && k + 1 < comPeso.length) return arredondarFator((comPeso[k].razao + comPeso[k + 1].razao) / 2)
+    if (acumulado > metade) return arredondarFator(comPeso[k].razao)
+  }
+  return arredondarFator(comPeso.at(-1)!.razao)
+}
+
+function arredondarFator(f: number): number {
+  const r = Math.round(f * 1000) / 1000
+  return r > 0 ? r : 1
+}
+
+/**
+ * Receitas feitas em texto: "1 receita", "1,96 receita", "2 receitas".
+ * @param f receitas feitas
+ */
+export function fatorTexto(f: number): string {
+  return `${f.toLocaleString('pt-BR', {maximumFractionDigits: 2})} ${f >= 2 ? 'receitas' : 'receita'}`
+}
+
+/**
  * Quantidade de referência de um ingrediente: a da ficha vezes o número de receitas feitas.
  * @param i ingrediente
  * @param fator receitas feitas
@@ -168,7 +228,7 @@ export function referencia(i: Pick<Ingrediente, 'qtd' | 'unidade'>, fator: numbe
 }
 
 /**
- * Rendimento de referência: o da ficha vezes o número de receitas feitas.
+ * Rendimento esperado: o da ficha vezes o número de receitas feitas.
  * @param r receita
  * @param fator receitas feitas
  */
@@ -178,7 +238,7 @@ export function rendimentoFicha(r: Receita, fator: number): number {
 
 /** Altera o lote aberto da receita, criando-o se preciso; devolver undefined descarta o lote. */
 function trocarAberto(p: Producao, receitaId: string, f: (l: Lote) => Lote | undefined, novoId: GeradorId, agora: number): Producao {
-  const atual = loteAberto(p, receitaId) ?? {id: novoId(), receitaId, modo: 'alterada' as Modo, fator: 1, usados: {}, iniciadoEm: agora}
+  const atual = loteAberto(p, receitaId) ?? {id: novoId(), receitaId, modo: 'alterada' as Modo, usados: {}, iniciadoEm: agora}
   const novo = f(atual)
   const resto = p.lotes.filter(l => l !== atual && l.id !== atual.id)
   return {...p, lotes: novo ? [...resto, novo] : resto}
@@ -187,12 +247,12 @@ function trocarAberto(p: Producao, receitaId: string, f: (l: Lote) => Lote | und
 /** Lote aberto sem nada preenchido não é registro: some. */
 function limpar(l: Lote): Lote | undefined {
   if (l.modo === 'ficha') return l
-  return Object.keys(l.usados).length || l.rendimento || l.obs || l.fator !== 1 ? l : undefined
+  return Object.keys(l.usados).length || l.rendimento || l.obs ? l : undefined
 }
 
 /**
- * Marca (ou desmarca) que os ingredientes seguiram a ficha: apaga as quantidades digitadas,
- * mantém rendimento, fator e observação.
+ * Marca (ou desmarca) que fez exatamente 1 receita da ficha: apaga as quantidades digitadas,
+ * mantém rendimento e observação.
  * @param p produção
  * @param receitaId id da receita
  * @param novoId gerador de id
@@ -237,19 +297,6 @@ export function definirRendimento(p: Producao, receitaId: string, qtd: number | 
 }
 
 /**
- * Define quantas receitas foram feitas (passos de meia receita).
- * @param p produção
- * @param receitaId id da receita
- * @param fator receitas feitas
- * @param novoId gerador de id
- * @param agora relógio
- */
-export function definirFator(p: Producao, receitaId: string, fator: number, novoId: GeradorId = uuid, agora = Date.now()): Producao {
-  const f = Math.min(FATOR_MAX, Math.max(FATOR_MIN, Math.round(fator * 2) / 2))
-  return trocarAberto(p, receitaId, l => limpar({...l, fator: f}), novoId, agora)
-}
-
-/**
  * Observação livre do lote aberto.
  * @param p produção
  * @param receitaId id da receita
@@ -288,6 +335,7 @@ export function faltaParaFinalizar(r: Receita, l: Lote | undefined): string | un
 
 /**
  * Finaliza o lote aberto: congela loja, dia e cozinheiro e põe na fila de envio.
+ * Exige um funcionário autorizado escolhido no topo.
  * @param p produção
  * @param r receita
  * @param agora relógio
@@ -295,7 +343,7 @@ export function faltaParaFinalizar(r: Receita, l: Lote | undefined): string | un
  */
 export function finalizar(p: Producao, r: Receita, agora = Date.now()): {producao: Producao, erro?: undefined} | {producao?: undefined, erro: string} {
   const l = loteAberto(p, r.id)
-  const erro = faltaParaFinalizar(r, l)
+  const erro = faltaParaFinalizar(r, l) ?? (autorizado(p.cozinheiro) ? undefined : 'Escolha seu nome no topo da tela.')
   if (erro || !l) return {erro: erro!}
   const fechado: Lote = {...l, finalizadoEm: agora, loja: p.loja, data: p.data, cozinheiro: p.cozinheiro}
   delete fechado.enviadoEm
@@ -336,40 +384,45 @@ export function marcarEnviado(p: Producao, loteId: string, finalizadoEm: number,
 }
 
 /**
- * Corpo do envio de um lote finalizado, com a ficha da época congelada em cada ingrediente.
+ * Corpo do envio de um lote finalizado, com a ficha da época (1 receita) congelada em cada ingrediente.
  * @param r receita
  * @param l lote finalizado
  */
 export function pacote(r: Receita, l: Lote): Pacote {
   return {
     id: l.id, loja: l.loja ?? LOJAS[0], data: l.data ?? '', cozinheiro: l.cozinheiro ?? '',
-    receitaId: r.id, receitaNome: r.nome, fator: l.fator, seguiuFicha: l.modo === 'ficha',
-    rendimentoFicha: rendimentoFicha(r, l.fator), rendimento: l.rendimento ?? 0, unidade: r.rendimento.unidade,
+    receitaId: r.id, receitaNome: r.nome, fator: fatorDe(r, l), seguiuFicha: l.modo === 'ficha',
+    rendimentoFicha: r.rendimento.qtd, rendimento: l.rendimento ?? 0, unidade: r.rendimento.unidade,
     obs: l.obs ?? '', iniciadoEm: l.iniciadoEm, finalizadoEm: l.finalizadoEm ?? 0,
-    ingredientes: r.ingredientes.map(i => {
-      const ficha = referencia(i, l.fator)
-      return {id: i.id, nome: i.nome, unidade: i.unidade, ficha, usado: l.usados[i.id] ?? ficha}
-    })
+    ingredientes: r.ingredientes.map(i => ({id: i.id, nome: i.nome, unidade: i.unidade, ficha: i.qtd, usado: l.usados[i.id] ?? i.qtd}))
   }
 }
 
+/** Menor diferença que conta, por unidade: 1 g ou ml, meia unidade. */
+function passo(u: Unidade): number {
+  return u === 'un' ? 0.5 : u === 'kg' || u === 'l' ? 0.001 : 1
+}
+
 /**
- * Ingredientes cuja quantidade usada difere da ficha.
+ * Ingredientes fora da proporção: usado diferente de ficha × receitas feitas por mais de 3%
+ * (e mais que o menor passo da unidade, para não acusar arredondamento de 1 g).
  * @param r receita
  * @param l lote
  */
 export function diferencas(r: Receita, l: Lote): Diferenca[] {
+  const f = fatorDe(r, l)
   return r.ingredientes.flatMap(ingrediente => {
-    const usado = l.usados[ingrediente.id]
-    const ficha = referencia(ingrediente, l.fator)
-    if (usado == null || usado === ficha) return []
-    return [{ingrediente, ficha, usado, variacao: ficha ? (usado - ficha) / ficha : 0}]
+    const usado = l.usados[ingrediente.id] ?? ingrediente.qtd
+    const esperado = ingrediente.qtd * f
+    const dif = usado - esperado
+    if (Math.abs(dif) <= Math.max(TOLERANCIA * esperado, passo(ingrediente.unidade))) return []
+    return [{ingrediente, esperado: arredondar(esperado, ingrediente.unidade), usado, variacao: esperado ? dif / esperado : 0}]
   })
 }
 
 /**
- * Situação do lote: incompleta (falta o rendimento), alterada (algum ingrediente mudou) ou
- * conforme (ingredientes da ficha).
+ * Situação do lote: incompleta (falta o rendimento), alterada (algum ingrediente fora da proporção)
+ * ou conforme (ingredientes na proporção da ficha, em qualquer quantidade de receitas).
  * @param r receita
  * @param l lote
  */
@@ -404,8 +457,8 @@ export function dataBr(iso: string): string {
   return iso.split('-').reverse().join('/')
 }
 
-function fatorTexto(f: number): string {
-  return f === 1 ? '' : ` ×${f.toLocaleString('pt-BR')}`
+function fatorSufixo(f: number): string {
+  return f === 1 ? '' : ` · ${fatorTexto(f)}`
 }
 
 /**
@@ -418,22 +471,24 @@ function fatorTexto(f: number): string {
 export function relatorio(p: Producao, receitas: Receita[]): string {
   const lotes = finalizadosDoDia(p, receitas)
   const alteradas = lotes.filter(x => situacao(x.receita, x.lote) === 'alterada').length
-  const linhas = [`🧑‍🍳 *THB · PRODUÇÃO* · ${p.loja} · ${dataBr(p.data)}`]
+  const linhas = [`🧑‍🍳 *THB · PRODUÇÃO* · ${NOME_LOJA[p.loja] ?? p.loja} · ${dataBr(p.data)}`]
   if (p.cozinheiro.trim()) linhas.push(`Cozinheiro: ${p.cozinheiro.trim()}`)
   linhas.push(`✅ ${lotes.length - alteradas} conforme a ficha · ✏️ ${alteradas} com alteração`)
   for (const {receita: r, lote: l} of lotes) {
     const u = r.rendimento.unidade
-    const ficha = rendimentoFicha(r, l.fator)
+    const f = fatorDe(r, l)
+    const esperado = rendimentoFicha(r, f)
+    const ref = f === 1 ? 'ficha' : 'esperado'
     const rend = l.rendimento ?? 0
     const difs = diferencas(r, l)
     linhas.push('')
-    if (situacao(r, l) === 'conforme') linhas.push(`✅ *${r.nome}*${fatorTexto(l.fator)} · ingredientes da ficha`)
+    if (situacao(r, l) === 'conforme') linhas.push(`✅ *${r.nome}*${fatorSufixo(f)} · na proporção da ficha`)
     else {
-      linhas.push(`✏️ *${r.nome}*${fatorTexto(l.fator)} · ALTERADA`)
-      for (const d of difs) linhas.push(`• ${d.ingrediente.nome}: *${formatar(d.usado, d.ingrediente.unidade)}* (ficha ${formatar(d.ficha, d.ingrediente.unidade)} · ${pct(d.variacao)})`)
-      if (difs.length < r.ingredientes.length) linhas.push('• Demais ingredientes: conforme a ficha')
+      linhas.push(`✏️ *${r.nome}*${fatorSufixo(f)} · ALTERADA`)
+      for (const d of difs) linhas.push(`• ${d.ingrediente.nome}: *${formatar(d.usado, d.ingrediente.unidade)}* (${ref} ${formatar(d.esperado, d.ingrediente.unidade)} · ${pct(d.variacao)})`)
+      if (difs.length < r.ingredientes.length) linhas.push('• Demais ingredientes: na proporção da ficha')
     }
-    linhas.push(`Rendimento: *${formatar(rend, u)}* (ficha ${formatar(ficha, u)}${rend === ficha ? '' : ` · ${pct(ficha ? (rend - ficha) / ficha : 0)}`})`)
+    linhas.push(`Rendimento: *${formatar(rend, u)}* (${ref} ${formatar(esperado, u)}${rend === esperado ? '' : ` · ${pct(esperado ? (rend - esperado) / esperado : 0)}`})`)
     if (l.obs) linhas.push(`_Obs.: ${l.obs}_`)
   }
   if (!lotes.length) linhas.push('', '_Nenhuma receita finalizada._')
@@ -474,6 +529,7 @@ export function podar(p: Producao, hoje: string): Producao {
 export function revisar(bruto: unknown, receitas: Receita[], hoje: string, novoId: GeradorId = uuid): Producao {
   const b = (bruto && typeof bruto === 'object' ? bruto : {}) as Record<string, unknown>
   const porId = new Map(receitas.map(r => [r.id, r]))
+  const loja = (x: unknown) => typeof x === 'string' && x in NOME_LOJA ? x : LOJAS[0]
   const dia = (x: unknown) => typeof x === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(x) ? x : undefined
   const tempo = (x: unknown) => typeof x === 'number' && Number.isFinite(x) && x > 0 ? x : undefined
   const ids = new Set<string>()
@@ -491,16 +547,15 @@ export function revisar(bruto: unknown, receitas: Receita[], hoje: string, novoI
     let id = typeof l.id === 'string' && /^[0-9a-f-]{36}$/i.test(l.id) ? l.id : novoId()
     if (ids.has(id)) id = novoId()
     ids.add(id)
-    const fator = typeof l.fator === 'number' && l.fator >= FATOR_MIN && l.fator <= FATOR_MAX ? Math.round(l.fator * 2) / 2 : 1
     const rend = typeof l.rendimento === 'number' && l.rendimento > 0 ? arredondar(l.rendimento, r.rendimento.unidade) : undefined
     const obs = typeof l.obs === 'string' && l.obs.trim() ? l.obs.trim().slice(0, 200) : undefined
     const finalizadoEm = rend ? tempo(l.finalizadoEm) : undefined
     const base: Lote = {
-      id, receitaId: r.id, modo: ficha ? 'ficha' : 'alterada', fator, usados, iniciadoEm: tempo(l.iniciadoEm) ?? Date.now(),
+      id, receitaId: r.id, modo: ficha ? 'ficha' : 'alterada', usados, iniciadoEm: tempo(l.iniciadoEm) ?? Date.now(),
       ...(rend ? {rendimento: rend} : {}), ...(obs ? {obs} : {})
     }
     if (finalizadoEm) {
-      const fim: Lote = {...base, finalizadoEm, loja: typeof l.loja === 'string' && l.loja ? l.loja : LOJAS[0],
+      const fim: Lote = {...base, finalizadoEm, loja: loja(l.loja),
         data: dia(l.data) ?? hoje, cozinheiro: typeof l.cozinheiro === 'string' ? l.cozinheiro.slice(0, 40) : ''}
       const enviado = tempo(l.enviadoEm)
       return [enviado ? {...fim, enviadoEm: enviado} : fim]
@@ -513,8 +568,8 @@ export function revisar(bruto: unknown, receitas: Receita[], hoje: string, novoI
   const unicos = lotes.reverse().filter(l => l.finalizadoEm || (vistos.has(l.receitaId) ? false : (vistos.add(l.receitaId), true))).reverse()
   return {
     versao: 2,
-    loja: typeof b.loja === 'string' && b.loja ? b.loja : LOJAS[0],
-    cozinheiro: typeof b.cozinheiro === 'string' ? b.cozinheiro.slice(0, 40) : '',
+    loja: loja(b.loja),
+    cozinheiro: typeof b.cozinheiro === 'string' && autorizado(b.cozinheiro) ? b.cozinheiro : '',
     data: dia(b.data) ?? hoje,
     lotes: unicos
   }

@@ -2,12 +2,13 @@
  import {onDestroy, onMount, tick} from 'svelte'
  import {RECEITAS, type Receita, type Ingrediente} from './receitas.ts'
  import {
-  LOJAS, FATOR_MIN, producaoVazia, revisar, loteAberto, finalizadosDe, alternarFicha, definirUsado, definirRendimento,
-  definirFator, definirObs, descartarAberto, faltaParaFinalizar, finalizar, reabrir, pendentesEnvio, marcarEnviado, pacote,
+  LOJAS, NOME_LOJA, producaoVazia, revisar, loteAberto, finalizadosDe, alternarFicha, definirUsado, definirRendimento,
+  fatorDe, fatorTexto, definirObs, descartarAberto, faltaParaFinalizar, finalizar, reabrir, pendentesEnvio, marcarEnviado, pacote,
   situacao, diferencas, finalizadosDoDia, relatorio, linkWhatsApp, podar, referencia, rendimentoFicha, formatar, lerCampo,
   textoCampo, casas, pct, type Producao, type Lote
  } from './estado.ts'
  import {enviarLote, verificarToken} from './enviar.ts'
+ import {FUNCIONARIOS} from './funcionarios.ts'
  import {ErroSincronizacao} from '../compras/sincronizar.ts'
  import {ler, gravar, pedirPersistencia} from '../compras/armazenamento.ts'
  import {rotulo, type Unidade} from '../compras/unidades.ts'
@@ -161,8 +162,6 @@
   document.getElementById(`ficha-${id}`)?.scrollIntoView({block: 'nearest', behavior: 'smooth'})
  }
  function seguiu(r: Receita) {producao = alternarFicha(producao, r.id); vibrar(30)}
- function passoFator(r: Receita, d: number) {producao = definirFator(producao, r.id, (loteAberto(producao, r.id)?.fator ?? 1) + d); vibrar(10)}
- function fatorTexto(f: number) {return `${f.toLocaleString('pt-BR')} ${f > 1 ? 'receitas' : 'receita'}`}
 
  /**
   * Filtra a digitação: kg, L e unidade aceitam vírgula e as casas da unidade; g e ml só dígitos.
@@ -194,7 +193,9 @@
   const res = finalizar(producao, r)
   if (!res.producao) {
    avisar(res.erro)
-   if (loteAberto(producao, r.id)) {await tick(); document.getElementById(`rend-${r.id}`)?.focus()}
+   await tick()
+   if (res.erro.startsWith('Escolha seu nome')) {window.scrollTo({top: 0, behavior: 'smooth'}); document.getElementById('quem')?.focus()}
+   else if (loteAberto(producao, r.id)) document.getElementById(`rend-${r.id}`)?.focus()
    return
   }
   producao = res.producao
@@ -244,10 +245,13 @@
   </div>
   <div class="dados">
    <div class="lojas" role="group" aria-label="Loja">
-    {#each LOJAS as l (l)}<button class:on={producao.loja === l} aria-pressed={producao.loja === l} onclick={() => {producao = {...producao, loja: l}}}>{l}</button>{/each}
+    {#each LOJAS as l (l)}<button class:on={producao.loja === l} aria-pressed={producao.loja === l} onclick={() => {producao = {...producao, loja: l}}}>{NOME_LOJA[l]}</button>{/each}
    </div>
    <input type="date" aria-label="Dia da produção" value={producao.data} max={hoje()} onchange={(e) => {if (e.currentTarget.value) producao = {...producao, data: e.currentTarget.value}}}/>
-   <input class="quem" aria-label="Cozinheiro" placeholder="Seu nome" maxlength="40" autocomplete="name" value={producao.cozinheiro} oninput={(e) => {producao = {...producao, cozinheiro: e.currentTarget.value.trim()}}}/>
+   <select id="quem" class="quem" class:vazio={!producao.cozinheiro} aria-label="Seu nome" value={producao.cozinheiro} onchange={(e) => {producao = {...producao, cozinheiro: e.currentTarget.value}}}>
+    <option value="" disabled>Seu nome</option>
+    {#each FUNCIONARIOS as f (f)}<option value={f}>{f}</option>{/each}
+   </select>
   </div>
  </div>
  <div class="fixo">
@@ -266,7 +270,7 @@
  {#each visiveis as r (r.id)}
   {@const lote = loteAberto(producao, r.id)}
   {@const feitos = finalizadosDe(producao, r.id)}
-  {@const fator = lote?.fator ?? 1}
+  {@const fator = lote ? fatorDe(r, lote) : 1}
   {@const difs = lote ? new Map(diferencas(r, lote).map(d => [d.ingrediente.id, d])) : new Map()}
   {@const rendRef = rendimentoFicha(r, fator)}
   {@const mostrarForm = !!lote || !feitos.length || outroLote === r.id}
@@ -281,11 +285,11 @@
    {#if aberta === r.id}
     <div class="corpo">
      {#each feitos as f, k (f.id)}
-      {@const rf = rendimentoFicha(r, f.fator)}
+      {@const rf = rendimentoFicha(r, fatorDe(r, f))}
       <div class="feito">
        <span class="ft-info">
         <b>✓ {feitos.length > 1 ? `Lote ${k + 1} · ` : ''}{hora(f.finalizadoEm ?? 0)}</b>
-        <small>{formatar(f.rendimento ?? 0, r.rendimento.unidade)}{#if f.rendimento !== rf}{` (${pct(((f.rendimento ?? 0) - rf) / rf)})`}{/if}{` · ${situacao(r, f) === 'alterada' ? 'alterada' : 'ingredientes da ficha'} · ${situacaoNuvem(f)}`}</small>
+        <small>{formatar(f.rendimento ?? 0, r.rendimento.unidade)}{#if f.rendimento !== rf}{` (${pct(((f.rendimento ?? 0) - rf) / rf)})`}{/if}{` · ${fatorTexto(fatorDe(r, f))} · ${situacao(r, f) === 'alterada' ? 'alterada' : 'na proporção'} · ${situacaoNuvem(f)}`}</small>
        </span>
        <button class="link" onclick={() => corrigir(f)}>corrigir</button>
       </div>
@@ -293,19 +297,12 @@
      {#if !mostrarForm}
       <button class="secondary" onclick={() => {outroLote = r.id}}>+ Fazer outro lote desta receita</button>
      {:else}
-      <div class="fator">
-       <span>Quanto fez</span>
-       <div class="stp">
-        <button aria-label="Meia receita a menos" disabled={fator <= FATOR_MIN} onclick={() => passoFator(r, -0.5)}>−</button>
-        <b>{fatorTexto(fator)}</b>
-        <button aria-label="Meia receita a mais" onclick={() => passoFator(r, 0.5)}>+</button>
-       </div>
-      </div>
       <button class="seguiu" class:on={lote?.modo === 'ficha'} aria-pressed={lote?.modo === 'ficha'} onclick={() => seguiu(r)}>
        {lote?.modo === 'ficha' ? '✓ Segui a ficha' : 'Segui a ficha'}
-       <small>mesmos ingredientes e quantidades</small>
+       <small>1 receita, com as quantidades da ficha</small>
       </button>
-      <p class="rotulo">{lote?.modo === 'ficha' ? 'Ingredientes da ficha' : 'Ou digite o que foi diferente'} <small>· em branco = igual à ficha</small></p>
+      <p class="rotulo">{lote?.modo === 'ficha' ? 'Ingredientes da ficha' : 'Ou digite o que usou'} <small>· em branco = igual à ficha</small></p>
+      {#if lote?.modo !== 'ficha'}<p class="dica">Fez mais ou menos de uma receita? Digite o que usou de cada ingrediente: o app calcula quantas receitas foram.</p>{/if}
       <div class="tabela">
        {#each r.ingredientes as i (i.id)}
         {@const ref = referencia(i, fator)}
@@ -313,19 +310,23 @@
         <label class="linha" class:mudou={!!d}>
          <span class="ing">
           <span class="t">{i.nome}</span>
-          <small>ficha {formatar(ref, i.unidade)}{#if i.obs && fator === 1}{` · ${i.obs}`}{/if}{#if d}{' · '}<b class:mais={d.variacao > 0} class:menos={d.variacao < 0}>{pct(d.variacao)}</b>{/if}</small>
+          <small>ficha {formatar(i.qtd, i.unidade)}{#if i.obs}{` · ${i.obs}`}{/if}{#if fator !== 1}{` · esperado ${formatar(ref, i.unidade)}`}{/if}{#if d}{' · '}<b class:mais={d.variacao > 0} class:menos={d.variacao < 0}>{pct(d.variacao)}</b>{/if}</small>
          </span>
          <span class="campo">
-          <input inputmode={modoTeclado(i.unidade)} enterkeyhint="next" autocomplete="off" placeholder={textoCampo(ref)} aria-label="{i.nome}, quantidade usada em {rotulo(i.unidade)}"
-           value={textoCampo(lote?.usados[i.id])} oninput={(e) => digitarUsado(r, i, e.currentTarget)}/>
+          <input inputmode={modoTeclado(i.unidade)} enterkeyhint="next" autocomplete="off" aria-label="{i.nome}, quantidade usada em {rotulo(i.unidade)}"
+           placeholder={textoCampo(i.qtd)} value={textoCampo(lote?.usados[i.id])} oninput={(e) => digitarUsado(r, i, e.currentTarget)}/>
           <span class="un">{rotulo(i.unidade)}</span>
          </span>
         </label>
        {/each}
+       <div class="linha calc">
+        <span class="ing"><span class="t">Quanto fez</span><small>calculado pelos ingredientes</small></span>
+        <b class="calc-v">{fatorTexto(fator)}</b>
+       </div>
        <label class="linha rend" class:falta={!!lote && !lote.rendimento} class:mudou={!!lote?.rendimento && lote.rendimento !== rendRef}>
         <span class="ing">
          <span class="t">Rendimento pesado *</span>
-         <small>ficha {formatar(rendRef, r.rendimento.unidade)}{#if lote?.rendimento && lote.rendimento !== rendRef}{' · '}<b class="var">{pct((lote.rendimento - rendRef) / rendRef)}</b>{:else if lote && !lote.rendimento}{' · '}<b class="var">pese e digite</b>{/if}</small>
+         <small>{fator === 1 ? 'ficha' : 'esperado'} {formatar(rendRef, r.rendimento.unidade)}{#if lote?.rendimento && lote.rendimento !== rendRef}{' · '}<b class="var">{pct((lote.rendimento - rendRef) / rendRef)}</b>{:else if lote && !lote.rendimento}{' · '}<b class="var">pese e digite</b>{/if}</small>
         </span>
         <span class="campo">
          <input id="rend-{r.id}" inputmode={modoTeclado(r.rendimento.unidade)} enterkeyhint="done" autocomplete="off" placeholder="peso" aria-label="Rendimento pesado em {rotulo(r.rendimento.unidade)}"
@@ -415,12 +416,12 @@
  .ft-info small{font-size:13px;color:var(--tx3);font-variant-numeric:tabular-nums}
  .feito .link{padding:6px 0}
  .corpo{padding:2px 12px 12px;border-top:1px solid var(--bd2)}
- .fator{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:10px;font-size:15px;font-weight:600;color:var(--tx2)}
- .stp{display:grid;grid-template-columns:46px minmax(104px,auto) 46px;align-items:center;border:1px solid var(--bd);border-radius:10px;background:var(--sup);height:44px;overflow:hidden}
- .stp button{height:100%;border:0;background:transparent;font-size:22px;font-weight:600;line-height:1;color:var(--tx2);touch-action:manipulation}
- .stp button:active:not(:disabled){background:var(--f1)}
- .stp b{text-align:center;font-size:15px;font-variant-numeric:tabular-nums}
- .seguiu{display:grid;gap:2px;width:100%;margin-top:10px;padding:12px 14px;border-radius:10px;border:1px solid var(--pri);background:var(--sup);color:var(--pri);font-size:17px;font-weight:700}
+ .dica{font-size:13px;line-height:1.45;color:var(--tx3);margin:-2px 0 8px}
+ .linha.calc{border-top:2px solid var(--bd);background:var(--f1);min-height:48px}
+ .calc-v{font-size:17px;font-variant-numeric:tabular-nums;padding-right:6px}
+ select.quem{width:100%;min-width:0;border:1px solid var(--bd);border-radius:8px;padding:9px 10px;background:var(--sup);color:var(--tx);font-size:16px;font-weight:600}
+ select.quem.vazio{color:var(--tx3);font-weight:400;border-color:var(--av-b);background:var(--av-f)}
+ .seguiu{display:grid;gap:2px;width:100%;margin-top:12px;padding:12px 14px;border-radius:10px;border:1px solid var(--pri);background:var(--sup);color:var(--pri);font-size:17px;font-weight:700}
  .seguiu small{font-size:13px;font-weight:500;color:var(--tx3)}
  .seguiu.on{background:var(--pri);color:#fff}
  .seguiu.on small{color:#fffc}
