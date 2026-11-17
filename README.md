@@ -22,14 +22,20 @@ vínculo recebem sugestão automática quando o nome bate sem ambiguidade (marca
 O service worker guarda o app: listas e preços já baixados funcionam sem sinal.
 
 ## Fichas técnicas (módulo 03)
-Registro da produção do dia contra a ficha técnica (`#/fichas`). O cozinheiro abre a receita e marca
-**Segui a ficha** (consumo e rendimento valem os da ficha) ou digita só o que foi diferente: a
-quantidade usada de cada ingrediente e o rendimento obtido, que é obrigatório quando algum
-ingrediente muda. "Quanto fez" escala a ficha em passos de meia receita. O botão **Enviar no
-WhatsApp** abre a conversa com o relatório pronto (valor usado, valor da ficha e variação).
+Registro da produção contra a ficha técnica (`#/fichas`). Por receita, o cozinheiro marca **Segui a
+ficha** ou digita só o que foi diferente, **pesa o rendimento** (obrigatório sempre) e toca em
+**Finalizar receita**. "Quanto fez" escala a ficha em meias receitas; "Fazer outro lote" registra
+mais de um lote no dia; "corrigir" reabre um lote finalizado.
 
-As receitas ficam em `src/lib/fichas/receitas.ts`, transcritas do documento "[THBF] Fichas Técnicas -
-2026"; a produção em andamento fica no IndexedDB do aparelho até ser substituída por uma nova.
+Dados: cada mudança é gravada na hora no IndexedDB do aparelho (bateria acabando não perde nada).
+Lote finalizado entra numa fila e sobe para o Supabase pela função `public.fichas_registrar(token, lote)`
+(tabelas `producao.lote` e `producao.lote_ingrediente`, com a ficha da época congelada). O id do
+lote nasce no aparelho, então reenvio e correção atualizam em vez de duplicar. A fila tenta de novo
+ao voltar o sinal, ao reabrir o app e a cada 45 s. Consulta: views `analise.v_producao_lote` e
+`analise.v_producao_ingrediente`.
+
+Conexão do celular: link `#/fichas/conectar/<código>` (token de escopo `fichas`, que só grava
+produção). O resumo do dia sai pelo WhatsApp (`wa.me`), só com receitas finalizadas.
 
 ## Desenvolvimento
 ```
