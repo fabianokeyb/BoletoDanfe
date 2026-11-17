@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import {RECEITAS, slug} from '../src/lib/fichas/receitas.ts'
 import {
-  producaoVazia, alternarFicha, definirUsado, definirRendimento, fatorDe, fatorTexto, definirObs, descartarAberto, loteAberto,
+  producaoVazia, cozinheiroAtual, escolherCozinheiro, escolherLoja, andamentoDaLoja, alternarFicha, definirUsado, definirRendimento, fatorDe, fatorTexto, definirObs, descartarAberto, loteAberto,
   finalizadosDe, finalizar, reabrir, pendentesEnvio, marcarEnviado, pacote, podar, faltaParaFinalizar,
   situacao, diferencas, relatorio, linkWhatsApp, revisar, formatar, lerCampo, referencia, rendimentoFicha, pct
 } from '../src/lib/fichas/estado.ts'
@@ -70,7 +70,7 @@ test('Alterada: relatório lista só o que mudou; lote aberto aparece como em an
   const txt = relatorio(p, RECEITAS)
   assert.match(txt, /✅ 0 conforme a ficha · ✏️ 1 com alteração/)
   assert.match(txt, /✏️ \*Calabrese\* · ALTERADA\n• Calabresa: \*1,500 kg\* \(ficha 1,234 kg · \+21,6%\)\n• Demais ingredientes: na proporção da ficha\nRendimento: \*4,500 kg\* \(ficha 4,198 kg · \+7,2%\)\n_Obs\.: peça maior_/)
-  assert.match(txt, /⏳ _Em andamento, não finalizadas: Barbecue_/)
+  assert.match(txt, /⏳ _Em andamento, não finalizadas: Barbecue \(Lucas Dodaro\)_/)
 })
 
 test('Segui a ficha apaga as quantidades digitadas; digitar sai do modo ficha', () => {
@@ -159,13 +159,41 @@ test('Receitas feitas: mediana ponderada pelo peso, não o ingrediente mais alte
   assert.equal(diferencas(mv, lote(meia)).length, 0)
 })
 
-test('Finalizar exige funcionário autorizado', () => {
+test('Cada loja tem o próprio cozinheiro e o próprio andamento', () => {
   const r = receita('Sal da Carne'), novoId = ids()
-  const p = definirRendimento(alternarFicha(producaoVazia(DIA), r.id, novoId), r.id, 1.5, novoId)
-  assert.equal(finalizar(p, r).erro, 'Escolha seu nome no topo da tela.')
-  assert.ok(finalizar({...p, cozinheiro: FUNCIONARIOS[0]}, r).producao)
-  assert.equal(revisar({cozinheiro: 'Fulano', loja: 'XYZ'}, RECEITAS, DIA).cozinheiro, '')
-  assert.equal(revisar({cozinheiro: 'Rita de Cássia', loja: 'THBT'}, RECEITAS, DIA).loja, 'THBT')
+  let p = producaoVazia(DIA)
+  assert.equal(alternarFicha(p, r.id, novoId), p, 'sem cozinheiro escolhido não começa receita')
+  p = escolherCozinheiro(p, 'Fulano')
+  assert.equal(cozinheiroAtual(p), '', 'nome fora da lista não vale')
+  p = escolherCozinheiro(p, LUCAS)
+  p = definirRendimento(alternarFicha(p, r.id, novoId), r.id, 1.5, novoId)
+  assert.equal(loteAberto(p, r.id).cozinheiro, LUCAS)
+  // Tijuca: outro cozinheiro, a mesma receita começa do zero
+  p = escolherCozinheiro(escolherLoja(p, 'THBT'), 'Rita de Cássia')
+  assert.equal(loteAberto(p, r.id), undefined)
+  p = alternarFicha(p, r.id, novoId)
+  assert.equal(loteAberto(p, r.id).cozinheiro, 'Rita de Cássia')
+  assert.deepEqual(andamentoDaLoja(p, 'THBF'), {abertos: 1, finalizados: 0})
+  assert.deepEqual(andamentoDaLoja(p, 'THBT'), {abertos: 1, finalizados: 0})
+  // volta para Freguesia: Lucas continua lá e finaliza o lote dele
+  p = escolherLoja(p, 'THBF')
+  assert.equal(cozinheiroAtual(p), LUCAS)
+  p = finalizar(p, r, 7).producao
+  const [l] = finalizadosDe(p, r.id)
+  assert.deepEqual([l.loja, l.cozinheiro], ['THBF', LUCAS])
+  assert.deepEqual(andamentoDaLoja(p, 'THBF'), {abertos: 0, finalizados: 1})
+  assert.match(relatorio(escolherLoja(p, 'THBT'), RECEITAS), /Tijuca[\s\S]*Nenhuma receita finalizada[\s\S]*Em andamento, não finalizadas: Sal da Carne \(Rita de Cássia\)/)
+})
+
+test('Relatório com dois cozinheiros na mesma loja', () => {
+  const novoId = ids()
+  let p = producaoVazia(DIA, 'THBF', LUCAS)
+  p = finalizar(definirRendimento(alternarFicha(p, 'sal-da-carne', novoId), 'sal-da-carne', 1.5, novoId), receita('Sal da Carne'), 1).producao
+  p = escolherCozinheiro(p, 'Wagner Moreira')
+  p = finalizar(definirRendimento(alternarFicha(p, 'sal-da-batata', novoId), 'sal-da-batata', 1.5, novoId), receita('Sal da Batata'), 2).producao
+  const txt = relatorio(p, RECEITAS)
+  assert.match(txt, /Cozinheiros: Lucas Dodaro, Wagner Moreira/)
+  assert.match(txt, /\*Sal da Batata\*[\s\S]*_por Wagner Moreira_/)
 })
 
 test('Podar: só some o que já subiu e é de dia anterior', () => {
@@ -197,7 +225,8 @@ test('Leitura do armazenamento: migra a versão 1 e descarta lixo', () => {
       {id: '00000000-0000-4000-8000-0000000000aa', receitaId: 'sal-da-carne', modo: 'ficha', fator: 1, usados: {}, rendimento: 1.5, finalizadoEm: 9, loja: 'THBF', data: '2026-11-15', enviadoEm: 10}
     ]
   }, RECEITAS, DIA, novoId)
-  assert.equal(p.versao, 2)
+  assert.equal(p.versao, 3)
+  assert.deepEqual(p.cozinheiros, {})
   assert.equal(p.lotes.length, 3, 'um aberto por receita')
   const cal = loteAberto(p, 'calabrese')
   assert.deepEqual({usados: cal.usados, rend: cal.rendimento}, {usados: {calabresa: 1.235}, rend: 4})

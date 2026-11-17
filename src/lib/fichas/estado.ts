@@ -1,8 +1,9 @@
 /**
  * Registro de produção contra a ficha técnica: funções puras, sem DOM.
  *
- * Cada receita feita vira um lote. Enquanto o cozinheiro preenche, o lote está aberto (no máximo
- * um aberto por receita). Ao tocar "Finalizar receita" ele congela loja, dia e cozinheiro, entra na
+ * Cada receita feita vira um lote, que pertence a uma loja e a um cozinheiro desde o primeiro número
+ * digitado. Enquanto é preenchido, o lote está aberto (no máximo um aberto por receita em cada loja).
+ * Cada loja tem o próprio cozinheiro e o próprio andamento. Ao tocar "Finalizar receita" ele grava o dia, entra na
  * fila de envio e sai para o Supabase assim que houver sinal. O id do lote nasce no aparelho, então
  * reenviar (sinal caiu no meio, correção depois) atualiza o mesmo registro em vez de duplicar.
  *
@@ -28,19 +29,22 @@ export interface Lote {
   rendimento?: number
   obs?: string
   iniciadoEm: number
+  /** Loja e cozinheiro de quem começou o lote. */
+  loja: string
+  cozinheiro: string
   /** Preenchidos ao finalizar. */
   finalizadoEm?: number
-  loja?: string
   data?: string
-  cozinheiro?: string
   /** Quando o servidor confirmou o recebimento desta versão do lote. */
   enviadoEm?: number
 }
 
 export interface Producao {
-  versao: 2
+  versao: 3
+  /** Loja na tela. */
   loja: string
-  cozinheiro: string
+  /** Cozinheiro trabalhando em cada loja (código da loja → nome). */
+  cozinheiros: Record<string, string>
   /** Dia da produção, AAAA-MM-DD. */
   data: string
   lotes: Lote[]
@@ -97,7 +101,33 @@ const uuid: GeradorId = () => crypto.randomUUID()
  * @param cozinheiro nome de quem produziu
  */
 export function producaoVazia(data: string, loja: string = LOJAS[0], cozinheiro = ''): Producao {
-  return {versao: 2, loja, cozinheiro, data, lotes: []}
+  return {versao: 3, loja, cozinheiros: cozinheiro ? {[loja]: cozinheiro} : {}, data, lotes: []}
+}
+
+/**
+ * Cozinheiro escolhido na loja da tela ('' se ninguém).
+ * @param p produção
+ */
+export function cozinheiroAtual(p: Producao): string {
+  return p.cozinheiros[p.loja] ?? ''
+}
+
+/**
+ * Escolhe o cozinheiro da loja da tela; nome fora da lista de autorizados limpa a escolha.
+ * @param p produção
+ * @param nome funcionário
+ */
+export function escolherCozinheiro(p: Producao, nome: string): Producao {
+  return {...p, cozinheiros: {...p.cozinheiros, [p.loja]: autorizado(nome) ? nome : ''}}
+}
+
+/**
+ * Troca a loja da tela.
+ * @param p produção
+ * @param loja código da loja
+ */
+export function escolherLoja(p: Producao, loja: string): Producao {
+  return loja in NOME_LOJA ? {...p, loja} : p
 }
 
 /**
@@ -148,12 +178,25 @@ export function textoCampo(n: number | undefined): string {
 }
 
 /**
- * Lote aberto (em preenchimento) de uma receita, se houver.
+ * Lote aberto (em preenchimento) de uma receita numa loja, se houver.
  * @param p produção
  * @param receitaId id da receita
+ * @param loja código da loja (padrão: a da tela)
  */
-export function loteAberto(p: Producao, receitaId: string): Lote | undefined {
-  return p.lotes.find(l => l.receitaId === receitaId && !l.finalizadoEm)
+export function loteAberto(p: Producao, receitaId: string, loja = p.loja): Lote | undefined {
+  return p.lotes.find(l => l.receitaId === receitaId && l.loja === loja && !l.finalizadoEm)
+}
+
+/**
+ * Andamento de uma loja no dia: receitas em preenchimento e lotes finalizados.
+ * @param p produção
+ * @param loja código da loja
+ */
+export function andamentoDaLoja(p: Producao, loja: string): {abertos: number, finalizados: number} {
+  return {
+    abertos: p.lotes.filter(l => l.loja === loja && !l.finalizadoEm).length,
+    finalizados: p.lotes.filter(l => l.loja === loja && l.finalizadoEm && l.data === p.data).length
+  }
 }
 
 /**
@@ -236,9 +279,15 @@ export function rendimentoFicha(r: Receita, fator: number): number {
   return arredondar(r.rendimento.qtd * fator, r.rendimento.unidade)
 }
 
-/** Altera o lote aberto da receita, criando-o se preciso; devolver undefined descarta o lote. */
+/**
+ * Altera o lote aberto da receita na loja da tela, criando-o se preciso (com a loja e o cozinheiro
+ * escolhido); devolver undefined descarta o lote. Sem cozinheiro autorizado não cria nada.
+ */
 function trocarAberto(p: Producao, receitaId: string, f: (l: Lote) => Lote | undefined, novoId: GeradorId, agora: number): Producao {
-  const atual = loteAberto(p, receitaId) ?? {id: novoId(), receitaId, modo: 'alterada' as Modo, usados: {}, iniciadoEm: agora}
+  const quem = cozinheiroAtual(p)
+  const existente = loteAberto(p, receitaId)
+  if (!existente && !autorizado(quem)) return p
+  const atual = existente ?? {id: novoId(), receitaId, modo: 'alterada' as Modo, usados: {}, iniciadoEm: agora, loja: p.loja, cozinheiro: quem}
   const novo = f(atual)
   const resto = p.lotes.filter(l => l !== atual && l.id !== atual.id)
   return {...p, lotes: novo ? [...resto, novo] : resto}
@@ -334,8 +383,8 @@ export function faltaParaFinalizar(r: Receita, l: Lote | undefined): string | un
 }
 
 /**
- * Finaliza o lote aberto: congela loja, dia e cozinheiro e põe na fila de envio.
- * Exige um funcionário autorizado escolhido no topo.
+ * Finaliza o lote aberto da loja da tela: grava o dia e põe na fila de envio. O cozinheiro é quem
+ * começou o lote; se esse nome não for mais autorizado, vale o escolhido agora na loja.
  * @param p produção
  * @param r receita
  * @param agora relógio
@@ -343,9 +392,10 @@ export function faltaParaFinalizar(r: Receita, l: Lote | undefined): string | un
  */
 export function finalizar(p: Producao, r: Receita, agora = Date.now()): {producao: Producao, erro?: undefined} | {producao?: undefined, erro: string} {
   const l = loteAberto(p, r.id)
-  const erro = faltaParaFinalizar(r, l) ?? (autorizado(p.cozinheiro) ? undefined : 'Escolha seu nome no topo da tela.')
+  const quem = l && autorizado(l.cozinheiro) ? l.cozinheiro : cozinheiroAtual(p)
+  const erro = faltaParaFinalizar(r, l) ?? (autorizado(quem) ? undefined : 'Escolha seu nome no topo da tela.')
   if (erro || !l) return {erro: erro!}
-  const fechado: Lote = {...l, finalizadoEm: agora, loja: p.loja, data: p.data, cozinheiro: p.cozinheiro}
+  const fechado: Lote = {...l, finalizadoEm: agora, data: p.data, cozinheiro: quem}
   delete fechado.enviadoEm
   return {producao: {...p, lotes: p.lotes.map(x => x === l ? fechado : x)}}
 }
@@ -358,7 +408,7 @@ export function finalizar(p: Producao, r: Receita, agora = Date.now()): {produca
  */
 export function reabrir(p: Producao, loteId: string): Producao {
   const l = p.lotes.find(x => x.id === loteId)
-  if (!l?.finalizadoEm || loteAberto(p, l.receitaId)) return p
+  if (!l?.finalizadoEm || loteAberto(p, l.receitaId, l.loja)) return p
   const {finalizadoEm: _f, enviadoEm: _e, ...aberto} = l
   return {...p, lotes: p.lotes.map(x => x === l ? aberto : x)}
 }
@@ -390,7 +440,7 @@ export function marcarEnviado(p: Producao, loteId: string, finalizadoEm: number,
  */
 export function pacote(r: Receita, l: Lote): Pacote {
   return {
-    id: l.id, loja: l.loja ?? LOJAS[0], data: l.data ?? '', cozinheiro: l.cozinheiro ?? '',
+    id: l.id, loja: l.loja, data: l.data ?? '', cozinheiro: l.cozinheiro,
     receitaId: r.id, receitaNome: r.nome, fator: fatorDe(r, l), seguiuFicha: l.modo === 'ficha',
     rendimentoFicha: r.rendimento.qtd, rendimento: l.rendimento ?? 0, unidade: r.rendimento.unidade,
     obs: l.obs ?? '', iniciadoEm: l.iniciadoEm, finalizadoEm: l.finalizadoEm ?? 0,
@@ -472,7 +522,8 @@ export function relatorio(p: Producao, receitas: Receita[]): string {
   const lotes = finalizadosDoDia(p, receitas)
   const alteradas = lotes.filter(x => situacao(x.receita, x.lote) === 'alterada').length
   const linhas = [`🧑‍🍳 *THB · PRODUÇÃO* · ${NOME_LOJA[p.loja] ?? p.loja} · ${dataBr(p.data)}`]
-  if (p.cozinheiro.trim()) linhas.push(`Cozinheiro: ${p.cozinheiro.trim()}`)
+  const quem = [...new Set(lotes.map(x => x.lote.cozinheiro).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'pt-BR'))
+  if (quem.length) linhas.push(`${quem.length > 1 ? 'Cozinheiros' : 'Cozinheiro'}: ${quem.join(', ')}`)
   linhas.push(`✅ ${lotes.length - alteradas} conforme a ficha · ✏️ ${alteradas} com alteração`)
   for (const {receita: r, lote: l} of lotes) {
     const u = r.rendimento.unidade
@@ -489,10 +540,11 @@ export function relatorio(p: Producao, receitas: Receita[]): string {
       if (difs.length < r.ingredientes.length) linhas.push('• Demais ingredientes: na proporção da ficha')
     }
     linhas.push(`Rendimento: *${formatar(rend, u)}* (${ref} ${formatar(esperado, u)}${rend === esperado ? '' : ` · ${pct(esperado ? (rend - esperado) / esperado : 0)}`})`)
+    if (quem.length > 1) linhas.push(`_por ${l.cozinheiro}_`)
     if (l.obs) linhas.push(`_Obs.: ${l.obs}_`)
   }
   if (!lotes.length) linhas.push('', '_Nenhuma receita finalizada._')
-  const abertas = receitas.filter(r => loteAberto(p, r.id)).map(r => r.nome)
+  const abertas = receitas.flatMap(r => {const a = loteAberto(p, r.id); return a ? [`${r.nome} (${a.cozinheiro})`] : []})
   if (abertas.length) linhas.push('', `⏳ _Em andamento, não finalizadas: ${abertas.join(', ')}_`)
   return linhas.join('\n')
 }
@@ -520,7 +572,7 @@ export function podar(p: Producao, hoje: string): Producao {
 
 /**
  * Valida a produção lida do armazenamento (não confiável) contra o cadastro de receitas.
- * Migra a versão 1 (um lote por receita, sem id nem finalização).
+ * Migra a versão 1 (um lote por receita, sem id) e a 2 (um cozinheiro só; lote aberto sem loja).
  * @param bruto objeto lido
  * @param receitas cadastro de receitas
  * @param hoje dia usado quando não há data válida
@@ -532,6 +584,12 @@ export function revisar(bruto: unknown, receitas: Receita[], hoje: string, novoI
   const loja = (x: unknown) => typeof x === 'string' && x in NOME_LOJA ? x : LOJAS[0]
   const dia = (x: unknown) => typeof x === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(x) ? x : undefined
   const tempo = (x: unknown) => typeof x === 'number' && Number.isFinite(x) && x > 0 ? x : undefined
+  const lojaPadrao = loja(b.loja)
+  const nome = (x: unknown) => typeof x === 'string' && autorizado(x) ? x : ''
+  const cozinheiros: Record<string, string> = {}
+  const cz = (b.cozinheiros && typeof b.cozinheiros === 'object' ? b.cozinheiros : {}) as Record<string, unknown>
+  for (const k of LOJAS) if (nome(cz[k])) cozinheiros[k] = nome(cz[k])
+  if (nome(b.cozinheiro) && !cozinheiros[lojaPadrao]) cozinheiros[lojaPadrao] = nome(b.cozinheiro)
   const ids = new Set<string>()
   const lotes = (Array.isArray(b.lotes) ? b.lotes : []).flatMap((x: unknown): Lote[] => {
     const l = (x && typeof x === 'object' ? x : {}) as Record<string, unknown>
@@ -550,26 +608,32 @@ export function revisar(bruto: unknown, receitas: Receita[], hoje: string, novoI
     const rend = typeof l.rendimento === 'number' && l.rendimento > 0 ? arredondar(l.rendimento, r.rendimento.unidade) : undefined
     const obs = typeof l.obs === 'string' && l.obs.trim() ? l.obs.trim().slice(0, 200) : undefined
     const finalizadoEm = rend ? tempo(l.finalizadoEm) : undefined
+    const lojaLote = typeof l.loja === 'string' && l.loja in NOME_LOJA ? l.loja : lojaPadrao
     const base: Lote = {
       id, receitaId: r.id, modo: ficha ? 'ficha' : 'alterada', usados, iniciadoEm: tempo(l.iniciadoEm) ?? Date.now(),
+      loja: lojaLote, cozinheiro: nome(l.cozinheiro) || (finalizadoEm ? '' : cozinheiros[lojaLote] ?? ''),
       ...(rend ? {rendimento: rend} : {}), ...(obs ? {obs} : {})
     }
     if (finalizadoEm) {
-      const fim: Lote = {...base, finalizadoEm, loja: loja(l.loja),
-        data: dia(l.data) ?? hoje, cozinheiro: typeof l.cozinheiro === 'string' ? l.cozinheiro.slice(0, 40) : ''}
+      const fim: Lote = {...base, finalizadoEm, data: dia(l.data) ?? hoje,
+        cozinheiro: typeof l.cozinheiro === 'string' ? l.cozinheiro.slice(0, 40) : ''}
       const enviado = tempo(l.enviadoEm)
       return [enviado ? {...fim, enviadoEm: enviado} : fim]
     }
     const aberto = limpar(base)
     return aberto ? [aberto] : []
   })
-  // No máximo um lote aberto por receita: o mais recente fica.
+  // No máximo um lote aberto por receita em cada loja: o mais recente fica.
   const vistos = new Set<string>()
-  const unicos = lotes.reverse().filter(l => l.finalizadoEm || (vistos.has(l.receitaId) ? false : (vistos.add(l.receitaId), true))).reverse()
+  const unicos = lotes.reverse().filter(l => {
+    if (l.finalizadoEm) return true
+    const k = `${l.receitaId}|${l.loja}`
+    return vistos.has(k) ? false : (vistos.add(k), true)
+  }).reverse()
   return {
-    versao: 2,
-    loja: loja(b.loja),
-    cozinheiro: typeof b.cozinheiro === 'string' && autorizado(b.cozinheiro) ? b.cozinheiro : '',
+    versao: 3,
+    loja: lojaPadrao,
+    cozinheiros,
     data: dia(b.data) ?? hoje,
     lotes: unicos
   }

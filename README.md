@@ -28,7 +28,9 @@ ficha** ou digita só o que foi diferente, **pesa o rendimento** (obrigatório s
 Quantas receitas foram feitas é calculado, não perguntado: mediana das proporções usado/ficha,
 ponderada pela raiz do peso de cada ingrediente; ingredientes fora dessa proporção (>3%) aparecem
 como alteração, e o rendimento é comparado com ficha × receitas feitas. "Fazer outro lote" registra
-mais de um lote no dia; "corrigir" reabre um lote finalizado. Lojas: Freguesia (THBF) e Tijuca (THBT).
+mais de um lote no dia; "corrigir" reabre um lote finalizado. Lojas: Freguesia (THBF, verde) e
+Tijuca (THBT, azul), cada uma com o próprio cozinheiro e as próprias receitas em andamento; cada lote
+leva a loja e o cozinheiro de quem o começou.
 
 Dados: cada mudança é gravada na hora no IndexedDB do aparelho (bateria acabando não perde nada).
 Lote finalizado entra numa fila e sobe para o Supabase pela função `public.fichas_registrar(token, lote)`

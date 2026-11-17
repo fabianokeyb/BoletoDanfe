@@ -2,13 +2,13 @@
  import {onDestroy, onMount, tick} from 'svelte'
  import {RECEITAS, type Receita, type Ingrediente} from './receitas.ts'
  import {
-  LOJAS, NOME_LOJA, producaoVazia, revisar, loteAberto, finalizadosDe, alternarFicha, definirUsado, definirRendimento,
+  LOJAS, NOME_LOJA, cozinheiroAtual, escolherCozinheiro, escolherLoja, andamentoDaLoja, producaoVazia, revisar, loteAberto, finalizadosDe, alternarFicha, definirUsado, definirRendimento,
   fatorDe, fatorTexto, definirObs, descartarAberto, faltaParaFinalizar, finalizar, reabrir, pendentesEnvio, marcarEnviado, pacote,
   situacao, diferencas, finalizadosDoDia, relatorio, linkWhatsApp, podar, referencia, rendimentoFicha, formatar, lerCampo,
   textoCampo, casas, pct, type Producao, type Lote
  } from './estado.ts'
  import {enviarLote, verificarToken} from './enviar.ts'
- import {FUNCIONARIOS} from './funcionarios.ts'
+ import {FUNCIONARIOS, autorizado} from './funcionarios.ts'
  import {ErroSincronizacao} from '../compras/sincronizar.ts'
  import {ler, gravar, pedirPersistencia} from '../compras/armazenamento.ts'
  import {rotulo, type Unidade} from '../compras/unidades.ts'
@@ -50,6 +50,7 @@
   return RECEITAS.filter(r => (!q || normalizar(r.nome).includes(q)) && (!soFeitas || loteAberto(producao, r.id) || finalizadosDe(producao, r.id).length))
  })
  const mensagem = $derived(relatorio(producao, RECEITAS))
+ const quem = $derived(cozinheiroAtual(producao))
  const nuvem = $derived(!token ? 'sem-codigo' : tokenRecusado ? 'recusado' : enviando ? 'enviando' : pendentes.length ? 'pendente' : 'ok')
 
  onMount(async () => {
@@ -194,7 +195,7 @@
   if (!res.producao) {
    avisar(res.erro)
    await tick()
-   if (res.erro.startsWith('Escolha seu nome')) {window.scrollTo({top: 0, behavior: 'smooth'}); document.getElementById('quem')?.focus()}
+   if (res.erro.startsWith('Escolha seu nome')) irParaNome()
    else if (loteAberto(producao, r.id)) document.getElementById(`rend-${r.id}`)?.focus()
    return
   }
@@ -206,6 +207,17 @@
  function corrigir(l: Lote) {
   if (loteAberto(producao, l.receitaId)) {avisar('Finalize ou descarte o lote em andamento antes.'); return}
   producao = reabrir(producao, l.id); outroLote = ''
+ }
+ function irParaNome() {window.scrollTo({top: 0, behavior: 'smooth'}); document.getElementById('quem')?.focus()}
+ function trocarLoja(l: string) {
+  if (l === producao.loja) return
+  producao = escolherLoja(producao, l); aberta = ''; outroLote = ''; vibrar(20)
+  window.scrollTo({top: 0, behavior: 'smooth'})
+ }
+ function andamentoTexto(l: string) {
+  const a = andamentoDaLoja(producao, l)
+  if (!a.abertos && !a.finalizados) return 'nada hoje'
+  return [a.abertos ? `${a.abertos} aberta${a.abertos > 1 ? 's' : ''}` : '', a.finalizados ? `${a.finalizados} finalizada${a.finalizados > 1 ? 's' : ''}` : ''].filter(Boolean).join(' · ')
  }
  function situacaoNuvem(l: Lote) {return l.enviadoEm ? '☁︎ salvo' : '⏳ no celular'}
 
@@ -234,22 +246,28 @@
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="fichas" class:digitando onfocusin={aoFocar} onfocusout={aoDesfocar}>
+<div class="fichas loja-{producao.loja}" class:digitando onfocusin={aoFocar} onfocusout={aoDesfocar}>
  <div class="topo">
   <div class="cabeca">
-   <div class="titulo"><p class="eyebrow">PRODUÇÃO · FICHAS TÉCNICAS</p><h1>O que foi feito hoje</h1></div>
+   <div class="titulo"><p class="eyebrow">PRODUÇÃO · FICHAS TÉCNICAS</p><h1>Produção de hoje · <span class="nome-loja">{NOME_LOJA[producao.loja]}</span></h1></div>
    <button class="nuvem n-{nuvem}" onclick={() => {tokenRecusado = false; void sincronizar()}} aria-label="Situação do envio para o servidor">
     {#if nuvem === 'ok'}☁︎ salvo{:else if nuvem === 'enviando'}↑ enviando{:else if nuvem === 'pendente'}⏳ {pendentes.length}{:else if nuvem === 'recusado'}⚠︎ código{:else}⚠︎ conectar{/if}
    </button>
    <button class="tema" aria-label={escuro ? 'Usar tema claro' : 'Usar tema escuro'} onclick={alternarTema}>{escuro ? '☀' : '☾'}</button>
   </div>
+  <div class="lojas" role="tablist" aria-label="Loja">
+   {#each LOJAS as l (l)}
+    <button role="tab" class="aba-{l}" class:on={producao.loja === l} aria-selected={producao.loja === l} onclick={() => trocarLoja(l)}>
+     <b>{NOME_LOJA[l]}</b>
+     <small>{producao.cozinheiros[l] || 'sem cozinheiro'}</small>
+     <small>{andamentoTexto(l)}</small>
+    </button>
+   {/each}
+  </div>
   <div class="dados">
-   <div class="lojas" role="group" aria-label="Loja">
-    {#each LOJAS as l (l)}<button class:on={producao.loja === l} aria-pressed={producao.loja === l} onclick={() => {producao = {...producao, loja: l}}}>{NOME_LOJA[l]}</button>{/each}
-   </div>
    <input type="date" aria-label="Dia da produção" value={producao.data} max={hoje()} onchange={(e) => {if (e.currentTarget.value) producao = {...producao, data: e.currentTarget.value}}}/>
-   <select id="quem" class="quem" class:vazio={!producao.cozinheiro} aria-label="Seu nome" value={producao.cozinheiro} onchange={(e) => {producao = {...producao, cozinheiro: e.currentTarget.value}}}>
-    <option value="" disabled>Seu nome</option>
+   <select id="quem" class="quem" class:vazio={!quem} aria-label="Cozinheiro em {NOME_LOJA[producao.loja]}" value={quem} onchange={(e) => {producao = escolherCozinheiro(producao, e.currentTarget.value)}}>
+    <option value="" disabled>Quem está na cozinha?</option>
     {#each FUNCIONARIOS as f (f)}<option value={f}>{f}</option>{/each}
    </select>
   </div>
@@ -278,7 +296,7 @@
    <button class="cab" aria-expanded={aberta === r.id} onclick={() => abrir(r.id)}>
     <span class="num">{r.numero}</span>
     <span class="nome">{r.nome}</span>
-    {#if lote}<span class="selo s-andamento">em andamento</span>
+    {#if lote}<span class="selo s-andamento">em andamento<small>{lote.cozinheiro}</small></span>
     {:else if feitos.length}<span class="selo s-feita">✓ finalizada{#if feitos.length > 1}{` ×${feitos.length}`}{/if}</span>
     {:else}<span class="rend-ficha">{formatar(r.rendimento.qtd, r.rendimento.unidade)}</span>{/if}
    </button>
@@ -288,7 +306,7 @@
       {@const rf = rendimentoFicha(r, fatorDe(r, f))}
       <div class="feito">
        <span class="ft-info">
-        <b>✓ {feitos.length > 1 ? `Lote ${k + 1} · ` : ''}{hora(f.finalizadoEm ?? 0)}</b>
+        <b>✓ {feitos.length > 1 ? `Lote ${k + 1} · ` : ''}{hora(f.finalizadoEm ?? 0)} · {f.cozinheiro}</b>
         <small>{formatar(f.rendimento ?? 0, r.rendimento.unidade)}{#if f.rendimento !== rf}{` (${pct(((f.rendimento ?? 0) - rf) / rf)})`}{/if}{` · ${fatorTexto(fatorDe(r, f))} · ${situacao(r, f) === 'alterada' ? 'alterada' : 'na proporção'} · ${situacaoNuvem(f)}`}</small>
        </span>
        <button class="link" onclick={() => corrigir(f)}>corrigir</button>
@@ -296,7 +314,13 @@
      {/each}
      {#if !mostrarForm}
       <button class="secondary" onclick={() => {outroLote = r.id}}>+ Fazer outro lote desta receita</button>
+     {:else if !lote && !autorizado(quem)}
+      <div class="pede-nome">
+       <p>Para começar esta receita em <b>{NOME_LOJA[producao.loja]}</b>, escolha quem está na cozinha.</p>
+       <button class="primary" onclick={irParaNome}>Escolher meu nome</button>
+      </div>
      {:else}
+      {#if lote}<p class="quem-faz">Em andamento por <b>{lote.cozinheiro}</b> · começou às {hora(lote.iniciadoEm)}</p>{/if}
       <button class="seguiu" class:on={lote?.modo === 'ficha'} aria-pressed={lote?.modo === 'ficha'} onclick={() => seguiu(r)}>
        {lote?.modo === 'ficha' ? '✓ Segui a ficha' : 'Segui a ficha'}
        <small>1 receita, com as quantidades da ficha</small>
@@ -390,11 +414,28 @@
  .nuvem{flex:0 0 auto;height:46px;border:1px solid var(--bd);background:var(--sup);border-radius:12px;padding:0 10px;font-size:14px;font-weight:700;white-space:nowrap}
  .n-ok{color:var(--v);border-color:var(--ok-b)} .n-pendente,.n-enviando{color:var(--av-t);border-color:var(--av-b);background:var(--av-f)} .n-sem-codigo,.n-recusado{color:var(--er-t);border-color:var(--er-b);background:var(--er-f)}
  .tema{flex:0 0 46px;height:46px;border:1px solid var(--bd);background:var(--sup);border-radius:12px;font-size:21px;color:var(--tx2);padding:0}
- .dados{display:grid;grid-template-columns:auto minmax(0,1fr) minmax(0,1fr);gap:8px;margin-top:10px}
+ .dados{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.3fr);gap:8px;margin-top:8px}
  .dados input{padding:9px 10px;font-size:16px}
- .lojas{display:flex;background:var(--f1);border-radius:10px;padding:3px;gap:3px}
- .lojas button{border:0;background:transparent;border-radius:8px;padding:8px 10px;font-size:14px;font-weight:800;color:var(--tx2)}
- .lojas button.on{background:var(--pri);color:#fff}
+ .fichas.loja-THBT{--pri:#1d5fa8;--loja-f:#e8f0fa;--loja-b:#9dbde4}
+ .fichas.loja-THBF{--loja-f:#e7f3ea;--loja-b:#9fc7ad}
+ :global(html[data-tema='escuro']) .fichas.loja-THBT{--pri:#3b82d0;--loja-f:#132233;--loja-b:#2c5480}
+ :global(html[data-tema='escuro']) .fichas.loja-THBF{--loja-f:#173326;--loja-b:#2f6b4b}
+ .nome-loja{color:var(--pri)}
+ .lojas{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px}
+ .lojas button{display:grid;gap:2px;text-align:left;border:2px solid var(--bd);background:var(--sup);border-radius:12px;padding:9px 12px;color:var(--tx2);min-width:0}
+ .lojas button b{font-size:17px}
+ .lojas button small{font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;opacity:.85}
+ .lojas .aba-THBF{--c:#1f6a43} .lojas .aba-THBT{--c:#1d5fa8}
+ :global(html[data-tema='escuro']) .lojas .aba-THBF{--c:#2f8462} :global(html[data-tema='escuro']) .lojas .aba-THBT{--c:#3b82d0}
+ .lojas button b{color:var(--c)}
+ .lojas button.on{background:var(--c);border-color:var(--c);color:#fff}
+ .lojas button.on b{color:#fff}
+ .fichas{border-top:5px solid var(--pri);transition:border-color .2s}
+ .pede-nome{margin-top:12px;padding:12px;border:1px dashed var(--loja-b);background:var(--loja-f);border-radius:10px}
+ .pede-nome p{margin:0;font-size:15px;line-height:1.45;color:var(--tx2)}
+ .pede-nome .primary{margin-top:10px}
+ .quem-faz{font-size:14px;color:var(--tx2);margin:12px 0 0}
+ .s-andamento small{display:block;font-size:12px;font-weight:600;opacity:.85;text-align:right}
  .busca{display:flex;gap:8px}
  .busca input{flex:1}
  .filtro{position:relative;flex:0 0 auto;border:1px solid var(--bd);background:var(--sup);border-radius:8px;padding:0 14px;font-size:15px;font-weight:600}
@@ -402,17 +443,17 @@
  .badge{position:absolute;top:-8px;right:-7px;display:grid;place-items:center;min-width:22px;height:22px;padding:0 6px;border-radius:11px;background:#ff3b30;color:#fff;font-size:13px;font-weight:700;line-height:1;border:2px solid var(--fundo);pointer-events:none}
  .ficha{background:var(--sup);border:1px solid var(--bd);border-radius:12px;margin-bottom:8px;scroll-margin-top:76px;transition:border-color .2s,background .2s}
  .ficha.aberta{box-shadow:0 2px 10px #0001}
- .ficha.st-feita{border-color:var(--ok-b);background:var(--ok-f)}
+ .ficha.st-feita{border-color:var(--loja-b);background:var(--loja-f)}
  .ficha.st-andamento{border-color:var(--av-b);background:var(--av-f)}
  .cab{display:flex;align-items:center;gap:10px;width:100%;min-height:56px;border:0;background:transparent;text-align:left;padding:8px 12px}
  .num{flex:0 0 30px;height:30px;display:grid;place-items:center;border-radius:50%;background:var(--f1);font-size:13px;font-weight:700;color:var(--tx2);font-variant-numeric:tabular-nums}
  .nome{flex:1;min-width:0;font-size:17px;font-weight:650;line-height:1.25}
  .rend-ficha{font-size:13px;color:var(--tx3);white-space:nowrap;font-variant-numeric:tabular-nums}
  .selo{font-size:13px;font-weight:800;border-radius:99px;padding:3px 9px;white-space:nowrap}
- .s-feita{color:var(--v)} .s-andamento{color:var(--av-t)}
+ .s-feita{color:var(--pri)} .s-andamento{color:var(--av-t)}
  .feito{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--bd2)}
  .ft-info{flex:1;min-width:0;display:grid;gap:2px}
- .ft-info b{font-size:15px;color:var(--v)}
+ .ft-info b{font-size:15px;color:var(--pri)}
  .ft-info small{font-size:13px;color:var(--tx3);font-variant-numeric:tabular-nums}
  .feito .link{padding:6px 0}
  .corpo{padding:2px 12px 12px;border-top:1px solid var(--bd2)}
@@ -472,5 +513,5 @@
  @media(min-width:901px){.barra{left:250px}}
  .toast{position:fixed;left:50%;bottom:84px;transform:translateX(-50%);background:#0b1a15;color:#fff;border-radius:99px;padding:10px 18px;font-size:15px;z-index:20;box-shadow:0 6px 20px #0003;max-width:90vw;text-align:center}
  :global(html[data-tema='escuro']) .toast{background:#e6eee9;color:#0e1512}
- @media(max-width:420px){.campo{flex-basis:118px}.dados{grid-template-columns:auto minmax(0,1fr)}.dados .quem{grid-column:1/-1}}
+ @media(max-width:420px){.campo{flex-basis:118px}}
 </style>
