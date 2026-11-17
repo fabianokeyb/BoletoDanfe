@@ -1,10 +1,17 @@
 /**
  * Envio dos lotes finalizados para o Supabase (projeto THBT), pelas funções
- * public.fichas_verificar e public.fichas_registrar. O token da cozinha tem escopo 'fichas':
- * só grava produção, não lê preços nem importa notas.
+ * public.fichas_verificar e public.fichas_registrar.
  */
 import {SUPABASE_URL, SUPABASE_CHAVE_PUBLICA, ErroSincronizacao} from '../compras/sincronizar.ts'
 import type {Pacote} from './estado.ts'
+
+/**
+ * Código da cozinha, embutido para os celulares não precisarem de configuração. É público por
+ * desenho (vai no site), por isso tem poder mínimo: escopo 'fichas' só grava produção, e o
+ * servidor só aceita lote com cozinheiro ativo em producao.funcionario. Para trocar, gere outro
+ * token em integracao.app_token, revogue este e publique o app de novo.
+ */
+export const TOKEN_COZINHA = 'thbc_U_QwF_fgCzpjS_I-Yx7xs8z948xP_vpp'
 
 /**
  * Chama uma função RPC do Supabase.
@@ -28,7 +35,8 @@ async function rpc(funcao: string, corpo: object, fetchFn: typeof fetch): Promis
   const dados = await resposta.json().catch(() => null) as unknown
   if (!resposta.ok) {
     const msg = (dados as {message?: string} | null)?.message ?? ''
-    if (/token/i.test(msg)) throw new ErroSincronizacao('token', 'Código da cozinha recusado. Peça o link de novo.')
+    if (/token/i.test(msg)) throw new ErroSincronizacao('token', 'O sistema recusou este app. Avise o Fabiano.')
+    if (/cozinheiro/i.test(msg)) throw new ErroSincronizacao('servidor', 'Este nome não está cadastrado no sistema. Avise o Fabiano.')
     throw new ErroSincronizacao('servidor', `O servidor respondeu ${resposta.status}. Tento de novo em instantes.`)
   }
   return dados

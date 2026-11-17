@@ -164,17 +164,42 @@ export function formatar(n: number, u: Unidade): string {
  * @param u unidade do campo
  */
 export function lerCampo(texto: string, u: Unidade): number | undefined {
-  const t = texto.trim().replace(',', '.')
+  let t = texto.trim()
+  // Com vírgula, pontos são separador de milhar: "1.234,567".
+  if (t.includes(',')) t = t.replace(/\./g, '').replace(',', '.')
   if (t === '' || t === '.' || !/^\d*\.?\d*$/.test(t)) return undefined
   return arredondar(Number(t), u)
 }
 
 /**
- * Texto de um número para o campo de digitação (vírgula decimal, sem unidade).
+ * Texto de um número para o campo de digitação, sem unidade. kg e L sempre com 3 casas
+ * ("1,200"), igual ao que a digitação automática mostra; as demais sem casas fixas.
  * @param n quantidade ou undefined
+ * @param u unidade do campo
  */
-export function textoCampo(n: number | undefined): string {
-  return n == null ? '' : String(n).replace('.', ',')
+export function textoCampo(n: number | undefined, u?: Unidade): string {
+  if (n == null) return ''
+  if (u && casasAutomaticas(u)) return n.toLocaleString('pt-BR', {minimumFractionDigits: 3, maximumFractionDigits: 3})
+  return String(n).replace('.', ',')
+}
+
+/**
+ * Unidades digitadas como calculadora: só números, com a vírgula entrando sozinha a 3 casas da
+ * direita (1 → 0,001; 12 → 0,012; 1200 → 1,200). Evita "1,2 kg" virar 12 kg quando a vírgula falha.
+ * @param u unidade
+ */
+export function casasAutomaticas(u: Unidade): boolean {
+  return u === 'kg' || u === 'l'
+}
+
+/**
+ * Aplica a digitação automática de 3 casas ao que está no campo.
+ * @param texto conteúdo atual do campo
+ * @returns texto formatado ("" se não houver dígitos)
+ */
+export function digitarTresCasas(texto: string): string {
+  const digitos = texto.replace(/\D/g, '').replace(/^0+/, '').slice(0, 7)
+  return digitos ? (Number(digitos) / 1000).toLocaleString('pt-BR', {minimumFractionDigits: 3, maximumFractionDigits: 3}) : ''
 }
 
 /**

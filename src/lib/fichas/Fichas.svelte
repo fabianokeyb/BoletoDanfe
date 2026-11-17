@@ -5,9 +5,9 @@
   LOJAS, NOME_LOJA, cozinheiroAtual, escolherCozinheiro, escolherLoja, andamentoDaLoja, producaoVazia, revisar, loteAberto, finalizadosDe, alternarFicha, definirUsado, definirRendimento,
   fatorDe, fatorTexto, definirObs, descartarAberto, faltaParaFinalizar, finalizar, reabrir, pendentesEnvio, marcarEnviado, pacote,
   situacao, diferencas, finalizadosDoDia, relatorio, linkWhatsApp, podar, referencia, rendimentoFicha, formatar, lerCampo,
-  textoCampo, casas, pct, type Producao, type Lote
+  textoCampo, casas, casasAutomaticas, digitarTresCasas, pct, type Producao, type Lote
  } from './estado.ts'
- import {enviarLote, verificarToken} from './enviar.ts'
+ import {enviarLote, TOKEN_COZINHA} from './enviar.ts'
  import {FUNCIONARIOS, autorizado} from './funcionarios.ts'
  import {ErroSincronizacao} from '../compras/sincronizar.ts'
  import {ler, gravar, pedirPersistencia} from '../compras/armazenamento.ts'
@@ -18,7 +18,6 @@
 
  const CHAVE_ESTADO = 'fichas'
  const CHAVE_WHATS = 'thb.fichas.whats'
- const CHAVE_TOKEN = 'thb.fichas.token'
  const INTERVALO_ENVIO = 45_000
 
  let producao = $state<Producao>(producaoVazia(hoje()))
@@ -31,13 +30,11 @@
  let aviso = $state('')
  let copiado = $state(false)
  let whats = $state('')
- let token = $state('')
  let tokenRecusado = $state(false)
  let enviando = $state(false)
  let erroEnvio = $state('')
  let escuro = $state(false)
  let digitando = $state(false)
- let tokenDigitado = $state('')
  let sairModoApp: (() => void) | undefined
  let relogio: ReturnType<typeof setInterval> | undefined
 
@@ -51,24 +48,18 @@
  })
  const mensagem = $derived(relatorio(producao, RECEITAS))
  const quem = $derived(cozinheiroAtual(producao))
- const nuvem = $derived(!token ? 'sem-codigo' : tokenRecusado ? 'recusado' : enviando ? 'enviando' : pendentes.length ? 'pendente' : 'ok')
+ const nuvem = $derived(tokenRecusado ? 'recusado' : enviando ? 'enviando' : pendentes.length ? 'pendente' : 'ok')
 
  onMount(async () => {
   sairModoApp = entrarModoApp()
   escuro = temaInicial(); aplicarTema(escuro)
-  try {
-   whats = localStorage.getItem(CHAVE_WHATS) ?? ''
-   token = localStorage.getItem(CHAVE_TOKEN) ?? ''
-  } catch {/* sem localStorage */}
-  const doLink = codigoDoEndereco()
+  try {whats = localStorage.getItem(CHAVE_WHATS) ?? ''} catch {/* sem localStorage */}
   const salvo = revisar(await ler<unknown>(CHAVE_ESTADO), RECEITAS, hoje())
   // O dia é sempre hoje ao abrir; lotes abertos de ontem continuam e recebem o dia ao finalizar.
   producao = podar({...salvo, data: hoje()}, hoje())
   carregado = true
   void pedirPersistencia()
-  if (doLink) await conectar(doLink)
   window.addEventListener('online', aoVoltarSinal)
-  window.addEventListener('hashchange', aoMudarEndereco)
   document.addEventListener('visibilitychange', aoVoltarSinal)
   relogio = setInterval(() => {if (pendentes.length) void sincronizar()}, INTERVALO_ENVIO)
   void sincronizar()
@@ -78,7 +69,6 @@
   if (relogio) clearInterval(relogio)
   if (typeof window === 'undefined') return
   window.removeEventListener('online', aoVoltarSinal)
-  window.removeEventListener('hashchange', aoMudarEndereco)
   document.removeEventListener('visibilitychange', aoVoltarSinal)
  })
 
@@ -99,59 +89,31 @@
  function vibrar(p: number | number[]) {try {navigator.vibrate?.(p)} catch {/* sem haptics */}}
  function alternarTema() {escuro = !escuro; aplicarTema(escuro); lembrarTema(escuro)}
 
- // ---------- conexão com o servidor ----------
- /** Lê o código de um link #/fichas/conectar/<código> e limpa o endereço (o código não fica no histórico). */
- function codigoDoEndereco(): string {
-  const m = location.hash.match(/^#\/?fichas\/conectar\/([\w-]{10,200})/)
-  if (!m) return ''
-  history.replaceState(null, '', location.pathname + location.search + '#/fichas')
-  return m[1]
- }
- /**
-  * Guarda o código da cozinha e confere com o servidor. Sem sinal, guarda assim mesmo:
-  * a conferência acontece no primeiro envio.
-  * @param codigo código recebido no link ou digitado
-  */
- async function conectar(codigo: string) {
-  const c = codigo.trim()
-  if (!c) return
-  try {
-   const nome = await verificarToken(c)
-   salvarToken(c)
-   avisar(`Celular conectado${nome ? ` (${nome})` : ''}.`)
-  } catch (e) {
-   if (e instanceof ErroSincronizacao && e.tipo === 'token') {avisar('Código recusado. Confira o link.'); return}
-   salvarToken(c)
-   avisar('Código guardado. Confiro quando tiver sinal.')
-  }
-  void sincronizar()
- }
- function salvarToken(c: string) {
-  token = c; tokenRecusado = false; tokenDigitado = ''
-  try {localStorage.setItem(CHAVE_TOKEN, c)} catch {/* não persiste */}
- }
- /** Link de conexão aberto com o app já na tela: só o endereço muda. */
- function aoMudarEndereco() {const c = codigoDoEndereco(); if (c) void conectar(c)}
+ // ---------- envio para o servidor ----------
  function aoVoltarSinal() {if (document.visibilityState !== 'hidden') void sincronizar()}
 
  /** Envia a fila, um lote por vez; o que falhar fica para a próxima tentativa. */
  async function sincronizar() {
-  if (enviando || !token || tokenRecusado || !carregado) return
+  if (enviando || tokenRecusado || !carregado) return
   const fila = pendentesEnvio(producao)
   if (!fila.length) {erroEnvio = ''; return}
   enviando = true
+  let erro = ''
   try {
    for (const l of fila) {
     const r = porId.get(l.receitaId)
     if (!r || !l.finalizadoEm) continue
-    await enviarLote(token, pacote(r, l))
-    producao = marcarEnviado(producao, l.id, l.finalizadoEm)
+    try {
+     await enviarLote(TOKEN_COZINHA, pacote(r, l))
+     producao = marcarEnviado(producao, l.id, l.finalizadoEm)
+    } catch (e) {
+     erro = e instanceof Error ? e.message : 'Falha ao enviar.'
+     // Sem sinal ou app recusado: os próximos também falhariam. Lote recusado: segue para o próximo.
+     if (e instanceof ErroSincronizacao && e.tipo === 'token') tokenRecusado = true
+     if (!(e instanceof ErroSincronizacao) || e.tipo !== 'servidor') break
+    }
    }
-   erroEnvio = ''
-  } catch (e) {
-   erroEnvio = e instanceof Error ? e.message : 'Falha ao enviar.'
-   if (e instanceof ErroSincronizacao && e.tipo === 'token') tokenRecusado = true
-  } finally {enviando = false}
+  } finally {enviando = false; erroEnvio = erro}
  }
 
  // ---------- preenchimento ----------
@@ -165,20 +127,24 @@
  function seguiu(r: Receita) {producao = alternarFicha(producao, r.id); vibrar(30)}
 
  /**
-  * Filtra a digitação: kg, L e unidade aceitam vírgula e as casas da unidade; g e ml só dígitos.
+  * Filtra a digitação. kg e L: calculadora de 3 casas (só números, vírgula automática).
+  * Unidade, g e ml: aceita uma vírgula e 1 casa, que fica visível (assim "600,5" nunca vira 6005);
+  * g e ml são arredondados para inteiro ao gravar.
   * @param el campo
   * @param u unidade do campo
   */
  function filtrar(el: HTMLInputElement, u: Unidade) {
-  const n = casas(u)
-  let v = el.value.replace('.', ',')
-  if (n) {
-   v = v.replace(/[^\d,]/g, '')
+  let v: string
+  if (casasAutomaticas(u)) v = digitarTresCasas(el.value)
+  else {
+   v = el.value.replace('.', ',').replace(/[^\d,]/g, '')
    const [int, ...dec] = v.split(',')
-   v = dec.length ? `${int},${dec.join('').slice(0, n)}` : int
-  } else v = v.replace(/\D/g, '')
-  v = v.slice(0, 8)
-  if (v !== el.value) el.value = v
+   v = (dec.length ? `${int},${dec.join('').slice(0, 1)}` : int).slice(0, 7)
+  }
+  if (v === el.value) return
+  el.value = v
+  // O cursor fica sempre no fim, como numa calculadora.
+  try {el.setSelectionRange(v.length, v.length)} catch {/* inputmode numérico em alguns navegadores */}
  }
  function digitarUsado(r: Receita, i: Ingrediente, el: HTMLInputElement) {
   filtrar(el, i.unidade)
@@ -188,9 +154,31 @@
   filtrar(el, r.rendimento.unidade)
   producao = definirRendimento(producao, r.id, lerCampo(el.value, r.rendimento.unidade))
  }
- function modoTeclado(u: Unidade) {return casas(u) ? 'decimal' : 'numeric'}
+ function modoTeclado(u: Unidade) {return casas(u) && !casasAutomaticas(u) ? 'decimal' : 'numeric'}
+
+ /** Desvio acima do qual o app pede um segundo toque antes de finalizar (provável erro de digitação). */
+ const DESVIO_SUSPEITO = 0.5
+ let confirmarDesvio = $state('')
+
+ /** Ingredientes e rendimento com desvio suspeito no lote aberto, em texto para o aviso. */
+ function suspeitos(r: Receita): string[] {
+  const l = loteAberto(producao, r.id)
+  if (!l) return []
+  const lista = diferencas(r, l).filter(d => Math.abs(d.variacao) > DESVIO_SUSPEITO).map(d => `${d.ingrediente.nome} ${pct(d.variacao)}`)
+  const esperado = rendimentoFicha(r, fatorDe(r, l))
+  if (l.rendimento && esperado && Math.abs(l.rendimento / esperado - 1) > DESVIO_SUSPEITO) lista.push(`Rendimento ${pct(l.rendimento / esperado - 1)}`)
+  return lista
+ }
 
  async function finalizarReceita(r: Receita) {
+  const s = suspeitos(r)
+  if (s.length && confirmarDesvio !== r.id) {
+   confirmarDesvio = r.id
+   setTimeout(() => {if (confirmarDesvio === r.id) confirmarDesvio = ''}, 6000)
+   vibrar([60, 40, 60])
+   return
+  }
+  confirmarDesvio = ''
   const res = finalizar(producao, r)
   if (!res.producao) {
    avisar(res.erro)
@@ -201,7 +189,7 @@
   }
   producao = res.producao
   outroLote = ''; vibrar([30, 60, 30])
-  avisar(token ? `${r.nome} finalizada.` : `${r.nome} finalizada e guardada no celular.`)
+  avisar(`${r.nome} finalizada.`)
   void sincronizar()
  }
  function corrigir(l: Lote) {
@@ -251,7 +239,7 @@
   <div class="cabeca">
    <div class="titulo"><p class="eyebrow">PRODUÇÃO · FICHAS TÉCNICAS</p><h1>Produção de hoje · <span class="nome-loja">{NOME_LOJA[producao.loja]}</span></h1></div>
    <button class="nuvem n-{nuvem}" onclick={() => {tokenRecusado = false; void sincronizar()}} aria-label="Situação do envio para o servidor">
-    {#if nuvem === 'ok'}☁︎ salvo{:else if nuvem === 'enviando'}↑ enviando{:else if nuvem === 'pendente'}⏳ {pendentes.length}{:else if nuvem === 'recusado'}⚠︎ código{:else}⚠︎ conectar{/if}
+    {#if nuvem === 'ok'}☁︎ salvo{:else if nuvem === 'enviando'}↑ enviando{:else if nuvem === 'pendente'}⏳ {pendentes.length}{:else}⚠︎ recusado{/if}
    </button>
    <button class="tema" aria-label={escuro ? 'Usar tema claro' : 'Usar tema escuro'} onclick={alternarTema}>{escuro ? '☀' : '☾'}</button>
   </div>
@@ -280,8 +268,7 @@
  </div>
 
  {#if !emDisco}<p class="alerta">Este navegador não está guardando os dados. Não feche a página antes de enviar.</p>{/if}
- {#if !token}<p class="alerta">Este celular ainda não está conectado ao sistema. As receitas ficam guardadas aqui até a conexão; abra o link de conexão ou cole o código em Ajustes, no fim da página.</p>
- {:else if tokenRecusado}<p class="alerta erro">O código deste celular foi recusado. As receitas continuam guardadas aqui; peça um link novo.</p>
+ {#if tokenRecusado}<p class="alerta erro">O sistema recusou o envio. As receitas continuam guardadas neste celular; avise o Fabiano.</p>
  {:else if pendentes.length && erroEnvio}<p class="alerta">{pendentes.length} {pendentes.length === 1 ? 'receita finalizada está' : 'receitas finalizadas estão'} só no celular. {erroEnvio}</p>{/if}
  <p class="lead">Abra a receita, marque <b>Segui a ficha</b> ou digite o que foi diferente, <b>pese o que rendeu</b> e toque em <b>Finalizar receita</b>.</p>
 
@@ -327,6 +314,7 @@
       </button>
       <p class="rotulo">{lote?.modo === 'ficha' ? 'Ingredientes da ficha' : 'Ou digite o que usou'} <small>· em branco = igual à ficha</small></p>
       {#if lote?.modo !== 'ficha'}<p class="dica">Fez mais ou menos de uma receita? Digite o que usou de cada ingrediente: o app calcula quantas receitas foram.</p>{/if}
+      <p class="dica">Em kg e L digite só os números, a vírgula entra sozinha: <b>1200</b> vira <b>1,200</b>.</p>
       <div class="tabela">
        {#each r.ingredientes as i (i.id)}
         {@const ref = referencia(i, fator)}
@@ -338,7 +326,7 @@
          </span>
          <span class="campo">
           <input inputmode={modoTeclado(i.unidade)} enterkeyhint="next" autocomplete="off" aria-label="{i.nome}, quantidade usada em {rotulo(i.unidade)}"
-           placeholder={textoCampo(i.qtd)} value={textoCampo(lote?.usados[i.id])} oninput={(e) => digitarUsado(r, i, e.currentTarget)}/>
+           placeholder={textoCampo(i.qtd, i.unidade)} value={textoCampo(lote?.usados[i.id], i.unidade)} oninput={(e) => digitarUsado(r, i, e.currentTarget)}/>
           <span class="un">{rotulo(i.unidade)}</span>
          </span>
         </label>
@@ -354,13 +342,14 @@
         </span>
         <span class="campo">
          <input id="rend-{r.id}" inputmode={modoTeclado(r.rendimento.unidade)} enterkeyhint="done" autocomplete="off" placeholder="peso" aria-label="Rendimento pesado em {rotulo(r.rendimento.unidade)}"
-          value={textoCampo(lote?.rendimento)} oninput={(e) => digitarRendimento(r, e.currentTarget)}/>
+          value={textoCampo(lote?.rendimento, r.rendimento.unidade)} oninput={(e) => digitarRendimento(r, e.currentTarget)}/>
          <span class="un">{rotulo(r.rendimento.unidade)}</span>
         </span>
        </label>
       </div>
       <input class="obs" placeholder="Observação (opcional): por que mudou?" maxlength="200" aria-label="Observação" value={lote?.obs ?? ''} onchange={(e) => {producao = definirObs(producao, r.id, e.currentTarget.value)}}/>
-      <button class="primary finalizar" class:pronto={!faltaParaFinalizar(r, lote)} onclick={() => finalizarReceita(r)}>Finalizar receita</button>
+      {#if confirmarDesvio === r.id}<p class="alerta erro">Confira antes de finalizar: <b>{suspeitos(r).join(' · ')}</b>. Se estiver certo, toque de novo.</p>{/if}
+      <button class="primary finalizar" class:pronto={!faltaParaFinalizar(r, lote)} onclick={() => finalizarReceita(r)}>{confirmarDesvio === r.id ? 'Está certo, finalizar' : 'Finalizar receita'}</button>
       {#if lote}<button class="link perigo" onclick={() => {producao = descartarAberto(producao, r.id); outroLote = ''}}>descartar o que foi preenchido</button>{/if}
      {/if}
     </div>
@@ -374,13 +363,8 @@
   <summary>Ver a mensagem do WhatsApp</summary>
   <pre>{mensagem}</pre>
  </details>
- <details class="bloco" open={!token}>
+ <details class="bloco">
   <summary>Ajustes</summary>
-  <label for="codigo">Código da cozinha <small>{token ? '· conectado' : '· não conectado'}</small></label>
-  <form class="linha-codigo" onsubmit={(e) => {e.preventDefault(); void conectar(tokenDigitado)}}>
-   <input id="codigo" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder={token ? '••••••••' : 'cole o código'} bind:value={tokenDigitado}/>
-   <button class="secondary curto" disabled={!tokenDigitado.trim()}>Conectar</button>
-  </form>
   <label for="whats">WhatsApp de destino <small>(com 55 e DDD; em branco, você escolhe o contato)</small></label>
   <input id="whats" inputmode="tel" placeholder="55 21 90000-0000" value={whats} onchange={(e) => salvarWhats(e.currentTarget.value)}/>
  </details>
@@ -412,7 +396,7 @@
  .cabeca{display:flex;gap:8px;align-items:center}
  .titulo{flex:1;min-width:0}
  .nuvem{flex:0 0 auto;height:46px;border:1px solid var(--bd);background:var(--sup);border-radius:12px;padding:0 10px;font-size:14px;font-weight:700;white-space:nowrap}
- .n-ok{color:var(--v);border-color:var(--ok-b)} .n-pendente,.n-enviando{color:var(--av-t);border-color:var(--av-b);background:var(--av-f)} .n-sem-codigo,.n-recusado{color:var(--er-t);border-color:var(--er-b);background:var(--er-f)}
+ .n-ok{color:var(--v);border-color:var(--ok-b)} .n-pendente,.n-enviando{color:var(--av-t);border-color:var(--av-b);background:var(--av-f)} .n-recusado{color:var(--er-t);border-color:var(--er-b);background:var(--er-f)}
  .tema{flex:0 0 46px;height:46px;border:1px solid var(--bd);background:var(--sup);border-radius:12px;font-size:21px;color:var(--tx2);padding:0}
  .dados{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.3fr);gap:8px;margin-top:8px}
  .dados input{padding:9px 10px;font-size:16px}
@@ -491,9 +475,6 @@
  .finalizar{margin-top:12px;opacity:.6}
  .finalizar.pronto{opacity:1}
  .corpo > .secondary{margin-top:12px}
- .linha-codigo{display:flex;gap:8px}
- .linha-codigo input{flex:1}
- .curto{width:auto;flex:0 0 auto;margin-top:0!important}
  .link{border:0;background:transparent;color:var(--az-t);text-decoration:underline;font-size:14px;padding:10px 0 0}
  .perigo{color:var(--er-t)!important}
  .vazio-curto{font-size:15px;color:var(--tx3);text-align:center;padding:18px 0}

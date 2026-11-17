@@ -4,7 +4,7 @@ import {RECEITAS, slug} from '../src/lib/fichas/receitas.ts'
 import {
   producaoVazia, cozinheiroAtual, escolherCozinheiro, escolherLoja, andamentoDaLoja, alternarFicha, definirUsado, definirRendimento, fatorDe, fatorTexto, definirObs, descartarAberto, loteAberto,
   finalizadosDe, finalizar, reabrir, pendentesEnvio, marcarEnviado, pacote, podar, faltaParaFinalizar,
-  situacao, diferencas, relatorio, linkWhatsApp, revisar, formatar, lerCampo, referencia, rendimentoFicha, pct
+  situacao, diferencas, relatorio, linkWhatsApp, revisar, formatar, lerCampo, textoCampo, digitarTresCasas, referencia, rendimentoFicha, pct
 } from '../src/lib/fichas/estado.ts'
 import {enviarLote, verificarToken} from '../src/lib/fichas/enviar.ts'
 import {FUNCIONARIOS} from '../src/lib/fichas/funcionarios.ts'
@@ -40,6 +40,26 @@ test('Formatação e leitura de campos', () => {
   assert.equal(lerCampo('600,4', 'g'), 600)
   assert.equal(lerCampo('abc', 'g'), undefined)
   assert.equal(pct(-0.08), '−8,0%')
+})
+
+test('kg e L como calculadora: vírgula automática a 3 casas', () => {
+  // digitando 1, 2, 0, 0
+  const passos = []
+  let campo = ''
+  for (const tecla of '1200') {campo = digitarTresCasas(campo + tecla); passos.push(campo)}
+  assert.deepEqual(passos, ['0,001', '0,012', '0,120', '1,200'])
+  assert.equal(lerCampo(campo, 'kg'), 1.2)
+  // apagar o último dígito volta uma casa
+  assert.equal(digitarTresCasas('1,20'), '0,120')
+  assert.equal(digitarTresCasas('0,00'), '')
+  // vírgula ou letra digitadas são ignoradas; zeros à esquerda somem
+  assert.equal(digitarTresCasas('1,2'), '0,012')
+  assert.equal(digitarTresCasas('0012345'), '12,345')
+  assert.equal(digitarTresCasas('12345678'), '1.234,567', 'no máximo 7 dígitos')
+  assert.equal(lerCampo('1.234,567', 'kg'), 1234.567)
+  assert.equal(textoCampo(3, 'kg'), '3,000')
+  assert.equal(textoCampo(2.47, 'l'), '2,470')
+  assert.equal(textoCampo(564, 'g'), '564')
 })
 
 test('Finalizar exige rendimento, mesmo seguindo a ficha', () => {

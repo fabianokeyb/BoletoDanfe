@@ -24,7 +24,8 @@ O service worker guarda o app: listas e preços já baixados funcionam sem sinal
 ## Fichas técnicas (módulo 03)
 Registro da produção contra a ficha técnica (`#/fichas`). Por receita, o cozinheiro marca **Segui a
 ficha** ou digita só o que foi diferente, **pesa o rendimento** (obrigatório sempre) e toca em
-**Finalizar receita**. Só funcionários autorizados (`src/lib/fichas/funcionarios.ts`) finalizam.
+**Finalizar receita**. kg e L são digitados como calculadora (1200 → 1,200); desvio acima de
+50% pede um segundo toque antes de finalizar. Só funcionários autorizados (`src/lib/fichas/funcionarios.ts`) finalizam.
 Quantas receitas foram feitas é calculado, não perguntado: mediana das proporções usado/ficha,
 ponderada pela raiz do peso de cada ingrediente; ingredientes fora dessa proporção (>3%) aparecem
 como alteração, e o rendimento é comparado com ficha × receitas feitas. "Fazer outro lote" registra
@@ -39,8 +40,9 @@ lote nasce no aparelho, então reenvio e correção atualizam em vez de duplicar
 ao voltar o sinal, ao reabrir o app e a cada 45 s. Consulta: views `analise.v_producao_lote` e
 `analise.v_producao_ingrediente`.
 
-Conexão do celular: link `#/fichas/conectar/<código>` (token de escopo `fichas`, que só grava
-produção). O resumo do dia sai pelo WhatsApp (`wa.me`), só com receitas finalizadas.
+Sem configuração no celular: o código da cozinha vai embutido (`TOKEN_COZINHA` em
+`src/lib/fichas/enviar.ts`). Ele é público por desenho e tem poder mínimo: escopo `fichas` só grava
+produção, e o servidor só aceita cozinheiro ativo em `producao.funcionario`. O resumo do dia sai pelo WhatsApp (`wa.me`), só com receitas finalizadas.
 
 ## Desenvolvimento
 ```
