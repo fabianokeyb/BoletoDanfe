@@ -11,7 +11,15 @@ import {FUNCIONARIOS} from '../src/lib/fichas/funcionarios.ts'
 
 const DIA = '2026-11-16'
 const LUCAS = 'Lucas Dodaro'
-const receita = nome => RECEITAS.find(r => r.nome === nome)
+/**
+ * Os testes de lógica usam a Calabrese como estava na ficha de 2026-11-16 (maionese 3 kg,
+ * rendimento 4,198 kg), para não mudarem quando a ficha muda. A ficha atual é conferida à parte.
+ */
+const CALABRESE_FIXA = {...RECEITAS.find(r => r.id === 'calabrese'), rendimento: {qtd: 4.198, unidade: 'kg'},
+  ingredientes: [['calabresa', 'Calabresa', 1.234, 'kg', '3 unidades'], ['cebola-roxa', 'Cebola Roxa', 564, 'g'], ['maionese', 'Maionese', 3, 'kg'], ['molho-ingles', 'Molho Inglês', 250, 'ml'], ['oregano', 'Orégano', 10, 'g']]
+    .map(([id, nome, qtd, unidade]) => ({id, nome, qtd, unidade}))}
+const RT = RECEITAS.map(r => r.id === 'calabrese' ? CALABRESE_FIXA : r)
+const receita = nome => RT.find(r => r.nome === nome)
 /** Gerador de ids previsível. */
 const ids = () => {let n = 0; return () => `00000000-0000-4000-8000-${String(++n).padStart(12, '0')}`}
 
@@ -27,10 +35,15 @@ test('Cadastro: 27 fichas, ids únicos, quantidades positivas', () => {
   assert.equal(slug('Açúcar Mascavo'), 'acucar-mascavo')
 })
 
-test('Calabrese confere com a ficha', () => {
-  const r = receita('Calabrese')
-  assert.deepEqual(r.ingredientes.map(i => formatar(i.qtd, i.unidade)), ['1,234 kg', '564 g', '3,000 kg', '250 ml', '10 g'])
-  assert.equal(formatar(r.rendimento.qtd, r.rendimento.unidade), '4,198 kg')
+test('Calabrese confere com a ficha atual (maionese reduzida em 22/11/2026)', () => {
+  const r = RECEITAS.find(x => x.id === 'calabrese')
+  assert.deepEqual(r.ingredientes.map(i => formatar(i.qtd, i.unidade)), ['1,234 kg', '564 g', '2,800 kg', '250 ml', '10 g'])
+  assert.equal(formatar(r.rendimento.qtd, r.rendimento.unidade), '4,763 kg')
+  // o lote de 22/11 (2 receitas, 5,6 kg de maionese, 9,525 kg) fica dentro da ficha nova
+  const l = {modo: 'alterada', usados: {calabresa: 2.468, 'cebola-roxa': 1128, maionese: 5.6, 'molho-ingles': 500, oregano: 20}, rendimento: 9.525}
+  assert.equal(fatorDe(r, l), 2)
+  assert.equal(diferencas(r, l).length, 0)
+  assert.equal(rendimentoFicha(r, 2), 9.526)
 })
 
 test('Formatação e leitura de campos', () => {
@@ -75,7 +88,7 @@ test('Finalizar exige rendimento, mesmo seguindo a ficha', () => {
   assert.deepEqual({loja: l.loja, data: l.data, cozinheiro: l.cozinheiro, finalizadoEm: l.finalizadoEm}, {loja: 'THBF', data: DIA, cozinheiro: LUCAS, finalizadoEm: 1000})
   assert.equal(loteAberto(p, r.id), undefined)
   assert.equal(situacao(r, l), 'conforme')
-  const txt = relatorio(p, RECEITAS)
+  const txt = relatorio(p, RT)
   assert.match(txt, /^🧑‍🍳 \*THB · PRODUÇÃO\* · Freguesia · 16\/11\/2026\nCozinheiro: Lucas Dodaro/)
   assert.match(txt, /✅ \*Barbecue\* · na proporção da ficha\nRendimento: \*11,800 kg\* \(ficha 12,000 kg · −1,7%\)/)
 })
@@ -87,7 +100,7 @@ test('Alterada: relatório lista só o que mudou; lote aberto aparece como em an
   p = definirObs(p, r.id, ' peça maior ', novoId)
   p = finalizar(p, r).producao
   p = alternarFicha(p, receita('Barbecue').id, novoId)
-  const txt = relatorio(p, RECEITAS)
+  const txt = relatorio(p, RT)
   assert.match(txt, /✅ 0 conforme a ficha · ✏️ 1 com alteração/)
   assert.match(txt, /✏️ \*Calabrese\* · ALTERADA\n• Calabresa: \*1,500 kg\* \(ficha 1,234 kg · \+21,6%\)\n• Demais ingredientes: na proporção da ficha\nRendimento: \*4,500 kg\* \(ficha 4,198 kg · \+7,2%\)\n_Obs\.: peça maior_/)
   assert.match(txt, /⏳ _Em andamento, não finalizadas: Barbecue \(Lucas Dodaro\)_/)
@@ -148,7 +161,7 @@ test('Pacote para o servidor: ficha de 1 receita e receitas feitas calculadas', 
   assert.equal(pk.seguiuFicha, false)
   assert.deepEqual(pk.ingredientes[0], {id: 'calabresa', nome: 'Calabresa', unidade: 'kg', ficha: 1.234, usado: 2.6})
   assert.deepEqual(pk.ingredientes[4], {id: 'oregano', nome: 'Orégano', unidade: 'g', ficha: 10, usado: 20})
-  const txt = relatorio(p, RECEITAS)
+  const txt = relatorio(p, RT)
   assert.match(txt, /✏️ \*Calabrese\* · 2 receitas · ALTERADA\n• Calabresa: \*2,600 kg\* \(esperado 2,468 kg · \+5,3%\)\n• Demais ingredientes: na proporção da ficha\nRendimento: \*8,200 kg\* \(esperado 8,396 kg · −2,3%\)/)
 })
 
@@ -202,7 +215,7 @@ test('Cada loja tem o próprio cozinheiro e o próprio andamento', () => {
   const [l] = finalizadosDe(p, r.id)
   assert.deepEqual([l.loja, l.cozinheiro], ['THBF', LUCAS])
   assert.deepEqual(andamentoDaLoja(p, 'THBF'), {abertos: 0, finalizados: 1})
-  assert.match(relatorio(escolherLoja(p, 'THBT'), RECEITAS), /Tijuca[\s\S]*Nenhuma receita finalizada[\s\S]*Em andamento, não finalizadas: Sal da Carne \(Rita de Cássia\)/)
+  assert.match(relatorio(escolherLoja(p, 'THBT'), RT), /Tijuca[\s\S]*Nenhuma receita finalizada[\s\S]*Em andamento, não finalizadas: Sal da Carne \(Rita de Cássia\)/)
 })
 
 test('Relatório com dois cozinheiros na mesma loja', () => {
@@ -211,7 +224,7 @@ test('Relatório com dois cozinheiros na mesma loja', () => {
   p = finalizar(definirRendimento(alternarFicha(p, 'sal-da-carne', novoId), 'sal-da-carne', 1.5, novoId), receita('Sal da Carne'), 1).producao
   p = escolherCozinheiro(p, 'Wagner Moreira')
   p = finalizar(definirRendimento(alternarFicha(p, 'sal-da-batata', novoId), 'sal-da-batata', 1.5, novoId), receita('Sal da Batata'), 2).producao
-  const txt = relatorio(p, RECEITAS)
+  const txt = relatorio(p, RT)
   assert.match(txt, /Cozinheiros: Lucas Dodaro, Wagner Moreira/)
   assert.match(txt, /\*Sal da Batata\*[\s\S]*_por Wagner Moreira_/)
 })

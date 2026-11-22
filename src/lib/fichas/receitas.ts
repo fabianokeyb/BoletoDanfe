@@ -63,8 +63,8 @@ export const RECEITAS: Receita[] = [
   ficha(2, 'Base Vegana', [1.1, 'kg'], 12, [
     ['Alho Batido', 50, 'g'], ['Capim Limão', 100, 'g'], ['Limão', 1, 'un'], ['Molho Inglês', 500, 'ml'], ['Shoyu', 250, 'ml']
   ]),
-  ficha(3, 'Calabrese', [4.198, 'kg'], 7, [
-    ['Calabresa', 1.234, 'kg'], ['Cebola Roxa', 564, 'g', '3 unidades'], ['Maionese', 3, 'kg'], ['Molho Inglês', 250, 'ml'], ['Orégano', 10, 'g']
+  ficha(3, 'Calabrese', [4.763, 'kg'], 7, [
+    ['Calabresa', 1.234, 'kg'], ['Cebola Roxa', 564, 'g', '3 unidades'], ['Maionese', 2.8, 'kg'], ['Molho Inglês', 250, 'ml'], ['Orégano', 10, 'g']
   ]),
   ficha(4, 'Cebola Caramelizada na Cerveja', [2.055, 'kg'], 5, [
     ['Açúcar Mascavo', 350, 'g'], ['Cebola Branca', 1.89, 'kg'], ['Cerveja', 946, 'ml'], ['Molho Inglês', 300, 'ml'], ['Molho Shoyu', 200, 'ml']

@@ -251,7 +251,7 @@ function gramas(q: number, u: Unidade): number {
  * A mediana ignora o ingrediente que saiu da proporção: na Calabrese com 1,5 kg de calabresa e o
  * resto igual à ficha, dá 1 receita e a calabresa aparece +21,6%. Seguir o ingrediente mais
  * alterado daria 1,22 receita e acusaria todo o resto de faltar 18%; a média ponderada daria 1,05.
- * A raiz do peso evita os dois extremos: com o peso puro, a maionese (59% da Calabrese) decidiria
+ * A raiz do peso evita os dois extremos: com o peso puro, a maionese (58% da Calabrese) decidiria
  * sozinha; com peso igual, 10 g de orégano valeriam o mesmo que 3 kg de maionese.
  * @param r receita
  * @param l lote
