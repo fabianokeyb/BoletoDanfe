@@ -157,6 +157,17 @@ export function atualizarFavorecido(estado: Estado, notaId: string, favorecido: 
 }
 
 /**
+ * Define (ou limpa) o valor total da nota — a âncora que permite agrupar as parcelas por
+ * coerência de valor. undefined desfaz o total e volta ao fallback sem julgamento.
+ * @param estado estado atual
+ * @param notaId id da nota
+ * @param valorTotalCentavos total em centavos, ou undefined
+ */
+export function atualizarTotalNota(estado: Estado, notaId: string, valorTotalCentavos?: number): Estado {
+  return {...estado, notas: estado.notas.map(n => n.id === notaId ? {...n, valorTotalCentavos} : n)}
+}
+
+/**
  * Remove um documento.
  * @param estado estado atual
  * @param id id do documento
@@ -273,6 +284,28 @@ export function sugestoes(estado: Estado): Array<{notaId: string, docIds: string
     }
   }
   return resultado
+}
+
+/**
+ * Associação automática por valor, a ser chamada a cada leitura (boleto ou nota).
+ * Regra pedida pelo usuário, sem adoção cega:
+ *  1. Toda nota COM total informado reivindica o subconjunto de boletos soltos cujo valor
+ *     soma o que falta para o seu total (via {@link sugestoes}, disjunto entre notas).
+ *     Boleto que não encontra coerência de valor PERMANECE dissociado — não é grudado
+ *     numa nota só porque ela existe. Quando a nota certa entra depois, ela o reivindica.
+ *  2. Fallback, só quando não há como julgar: existe uma única nota e ela está SEM total.
+ *     Aí os boletos soltos são adotados por ela (não há ambiguidade possível).
+ * Nunca desvincula o que o usuário vinculou à mão.
+ * @param estado estado atual (não é alterado)
+ * @returns estado com os vínculos por valor aplicados
+ */
+export function reassociar(estado: Estado): Estado {
+  let e = estado
+  for (const s of sugestoes(estado)) {
+    for (const docId of s.docIds) e = vincular(e, docId, s.notaId)
+  }
+  if (e.notas.length === 1 && e.notas[0].valorTotalCentavos == null) e = absorverSoltosSeNotaUnica(e)
+  return e
 }
 
 /** Converte AAAA-MM-DD em DD/MM/AAAA sem passar por fuso horário. */

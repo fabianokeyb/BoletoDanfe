@@ -3,8 +3,8 @@ import assert from 'node:assert/strict'
 import {interpretarChaveNFe} from '../src/lib/linha-digitavel.ts'
 import {
   ESTADO_VAZIO, notaDaChave, notaManual, incluirDocumento, incluirNota, vincular,
-  absorverSoltosSeNotaUnica, removerNota, reconciliacao, parcelasDaNota, boletosDaNota,
-  sugestoes, planilhaTsv, totais
+  absorverSoltosSeNotaUnica, reassociar, atualizarTotalNota, removerNota, reconciliacao,
+  parcelasDaNota, boletosDaNota, sugestoes, planilhaTsv, totais
 } from '../src/lib/sessao.ts'
 
 const CHAVE = '33261010915021000190550010082722291141103184'
@@ -13,6 +13,60 @@ const CHAVE = '33261010915021000190550010082722291141103184'
 function boleto(barras, valorCentavos, vencimento) {
   return {tipo: 'boleto', barras, linha: barras, pontuada: barras, valorCentavos, vencimento}
 }
+
+test('reassociar: nota com total reivindica o subconjunto coerente; incoerente fica solto', () => {
+  let e = ESTADO_VAZIO
+  e = incluirNota(e, notaManual('100', 'A', {valorTotalCentavos: 100000}, 0)).estado  // total 1000,00
+  e = incluirDocumento(e, boleto('x1', 60000, '2026-11-10'), undefined, 1).estado     // 600
+  e = incluirDocumento(e, boleto('x2', 40000, '2026-11-17'), undefined, 2).estado     // 400 (x1+x2=1000)
+  e = incluirDocumento(e, boleto('x3', 35000, '2026-11-24'), undefined, 3).estado     // 350 não combina
+  e = reassociar(e)
+  const id = e.notas[0].id
+  assert.deepEqual(boletosDaNota(e, id).map(d => d.id).sort(), ['x1', 'x2'])
+  assert.equal(e.documentos.find(d => d.id === 'x3').notaId, undefined, 'boleto incoerente permanece dissociado')
+})
+
+test('reassociar: boleto lido antes; a nota entrante o reivindica por valor', () => {
+  let e = ESTADO_VAZIO
+  e = incluirDocumento(e, boleto('a', 73080, '2026-11-10'), undefined, 1).estado
+  e = incluirDocumento(e, boleto('b', 73080, '2026-11-17'), undefined, 2).estado
+  e = reassociar(e)                                           // sem nota: ficam soltos
+  assert.equal(e.documentos.filter(d => d.notaId).length, 0)
+  e = incluirNota(e, notaManual('200', 'P', {valorTotalCentavos: 146160}, 3)).estado  // 730,80 x2
+  e = reassociar(e)
+  assert.deepEqual(boletosDaNota(e, e.notas[0].id).map(d => d.id).sort(), ['a', 'b'])
+})
+
+test('reassociar: duas notas com total não roubam boletos uma da outra', () => {
+  let e = ESTADO_VAZIO
+  e = incluirNota(e, notaManual('1', 'A', {valorTotalCentavos: 100000}, 0)).estado
+  e = incluirNota(e, notaManual('2', 'B', {valorTotalCentavos: 50000}, 1)).estado
+  e = incluirDocumento(e, boleto('p', 100000, '2026-11-10'), undefined, 2).estado
+  e = incluirDocumento(e, boleto('q', 50000, '2026-11-11'), undefined, 3).estado
+  e = reassociar(e)
+  assert.equal(e.documentos.find(d => d.id === 'p').notaId, 'm:1:')
+  assert.equal(e.documentos.find(d => d.id === 'q').notaId, 'm:2:')
+})
+
+test('reassociar: nota única SEM total mantém o fallback (adota os soltos)', () => {
+  let e = ESTADO_VAZIO
+  e = incluirDocumento(e, boleto('s1', 12345, '2026-11-10'), undefined, 1).estado
+  e = incluirNota(e, notaDaChave(interpretarChaveNFe(CHAVE).nota, 'Top Alto', 2)).estado
+  e = reassociar(e)
+  assert.equal(e.documentos.find(d => d.id === 's1').notaId, CHAVE, 'sem como julgar, a nota única adota')
+})
+
+test('atualizarTotalNota: definir o total liga a âncora e reivindica o boleto', () => {
+  let e = ESTADO_VAZIO
+  e = incluirNota(e, notaManual('1', 'A', {}, 0)).estado    // sem total
+  e = incluirNota(e, notaManual('2', 'B', {}, 1)).estado    // sem total → 2 notas, nenhuma julga
+  e = incluirDocumento(e, boleto('k', 80000, '2026-11-10'), undefined, 2).estado
+  e = reassociar(e)
+  assert.equal(e.documentos.find(d => d.id === 'k').notaId, undefined, 'sem total: fica solto')
+  e = atualizarTotalNota(e, 'm:1:', 80000)
+  e = reassociar(e)
+  assert.equal(e.documentos.find(d => d.id === 'k').notaId, 'm:1:', 'com o total, a nota 1 reivindica')
+})
 
 test('Nota da chave: número, CNPJ e série para a planilha', () => {
   const {nota} = interpretarChaveNFe(CHAVE)
