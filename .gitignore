@@ -3,3 +3,7 @@ build/
 .svelte-kit/
 *.bak
 .DS_Store
+
+# screenshots de smoke test
+hud.png
+*.png
