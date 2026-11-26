@@ -7,3 +7,7 @@ build/
 # screenshots de smoke test
 hud.png
 *.png
+
+# tooling local do Mac (launcher + servidor)
+Abrir THB.command
+scripts/
