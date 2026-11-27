@@ -554,6 +554,7 @@
   </form>
   <div class="barra">
    <button class="secondary" onclick={() => copiarRelatorio('tudo')} disabled={!escolhidos}>{copiado === 'tudo' ? 'Copiado ✓' : '📋 Copiar'}</button>
+   <button class="secondary" onclick={() => {location.hash = `#/pedidos/novo/${secao}`}} disabled={!escolhidos} title="Transforma esta lista num card de pedido de compra que a equipe pode abrir e editar">🧾 Gerar pedido</button>
    <button class="primary" onclick={irComprar} disabled={!escolhidos}>Ir às compras · {escolhidos} {escolhidos === 1 ? 'item' : 'itens'} →</button>
   </div>
 

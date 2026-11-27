@@ -21,6 +21,19 @@ função `public.compras_precos(token)`, que exige o token do aparelho. Na sincr
 vínculo recebem sugestão automática quando o nome bate sem ambiguidade (marcada “auto” até confirmar).
 O service worker guarda o app: listas e preços já baixados funcionam sem sinal.
 
+## Pedidos de compra (módulo 06)
+Cada lista de compras vira um **card de pedido** (`#/pedidos`): número, quem pediu, data e hora, lojas
+(uma ou as duas, com a quantidade de cada loja por item), fornecedor, vendedor e situação. Qualquer pessoa
+autorizada abre o card e edita; o card nasce da tela Montar (botão **Gerar pedido**) ou do zero.
+É a fase 1 da "lista sagrada": ao salvar como **enviado**, a versão do card é congelada e as próximas
+etapas (cotação, NF-e, entrega, boleto, extrato) vão conferir contra ela.
+
+Dados no Supabase, schema `compras` (SQL em `supabase/2026-11-27_compras_pedidos.sql`), pelas funções
+`public.pedidos_contexto`, `pedidos_listar`, `pedido_abrir` e `pedido_salvar`, com o mesmo token do aparelho
+de Compras. Quem pode pedir fica em `compras.pessoa`. Toda gravação passa por `pedido_salvar`, que grava
+cada mudança (quem, quando, antes e depois) em `compras.pedido_alteracao` e recusa a gravação se outra
+pessoa salvou o card depois que ele foi aberto (campo `versao`). É a base do controle de alterações.
+
 ## Fichas técnicas (módulo 03)
 Registro da produção contra a ficha técnica (`#/fichas`). Por receita, o cozinheiro marca **Segui a
 ficha** ou digita só o que foi diferente, **pesa o rendimento** (obrigatório sempre) e toca em
