@@ -237,7 +237,7 @@
 <div class="fichas loja-{producao.loja}" class:digitando onfocusin={aoFocar} onfocusout={aoDesfocar}>
  <div class="topo">
   <div class="cabeca">
-   <div class="titulo"><p class="eyebrow">PRODUÇÃO · FICHAS TÉCNICAS</p><h1>Produção de hoje · <span class="nome-loja">{NOME_LOJA[producao.loja]}</span></h1></div>
+   <div class="titulo"><p class="eyebrow">PRODUÇÃO · FICHAS TÉCNICAS · <a class="manual" href="manual/" target="_blank" rel="noopener">MANUAL ↗</a></p><h1>Produção de hoje · <span class="nome-loja">{NOME_LOJA[producao.loja]}</span></h1></div>
    <button class="nuvem n-{nuvem}" onclick={() => {tokenRecusado = false; void sincronizar()}} aria-label="Situação do envio para o servidor">
     {#if nuvem === 'ok'}☁︎ salvo{:else if nuvem === 'enviando'}↑ enviando{:else if nuvem === 'pendente'}⏳ {pendentes.length}{:else}⚠︎ recusado{/if}
    </button>
@@ -392,6 +392,7 @@
  .alerta.erro{color:var(--er-t);background:var(--er-f);border-color:var(--er-b)}
  .alerta{font-size:14px;line-height:1.45;color:var(--av-t);background:var(--av-f);border:1px solid var(--av-b);border-radius:8px;padding:9px 12px;margin:10px 0 0}
  .topo{padding-top:12px}
+ .manual{color:inherit;text-decoration:underline;text-underline-offset:2px}
  .fixo{position:sticky;top:0;z-index:6;background:var(--fundo);margin:0 -2px;padding:8px 2px;padding-top:calc(8px + env(safe-area-inset-top));border-bottom:1px solid var(--bd2)}
  .cabeca{display:flex;gap:8px;align-items:center}
  .titulo{flex:1;min-width:0}
