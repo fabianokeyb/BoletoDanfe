@@ -1,6 +1,7 @@
 <script lang="ts">
  import {onDestroy, onMount, tick} from 'svelte'
  import {RECEITAS, type Receita, type Ingrediente} from './receitas.ts'
+ import {buscarCatalogo, converterCatalogo} from './catalogo.ts'
  import {
   LOJAS, NOME_LOJA, cozinheiroAtual, escolherCozinheiro, escolherLoja, andamentoDaLoja, producaoVazia, revisar, loteAberto, finalizadosDe, alternarFicha, definirUsado, definirRendimento,
   fatorDe, fatorTexto, definirObs, descartarAberto, faltaParaFinalizar, finalizar, reabrir, pendentesEnvio, marcarEnviado, pacote,
@@ -17,6 +18,7 @@
  import {temaInicial, aplicarTema, lembrarTema, entrarModoApp} from '../tema.ts'
 
  const CHAVE_ESTADO = 'fichas'
+ const CHAVE_CATALOGO = 'fichas.catalogo'
  const CHAVE_WHATS = 'thb.fichas.whats'
  const INTERVALO_ENVIO = 45_000
 
@@ -38,15 +40,17 @@
  let sairModoApp: (() => void) | undefined
  let relogio: ReturnType<typeof setInterval> | undefined
 
- const porId = new Map(RECEITAS.map(r => [r.id, r]))
+ /** Fichas vigentes: começa com a cópia embutida e troca pela do servidor (editada no manual). */
+ let receitas = $state<Receita[]>(RECEITAS)
+ const porId = $derived(new Map(receitas.map(r => [r.id, r])))
  const pendentes = $derived(pendentesEnvio(producao))
- const finalizadas = $derived(finalizadosDoDia(producao, RECEITAS).length)
- const emAndamento = $derived(RECEITAS.filter(r => loteAberto(producao, r.id)).length)
+ const finalizadas = $derived(finalizadosDoDia(producao, receitas).length)
+ const emAndamento = $derived(receitas.filter(r => loteAberto(producao, r.id)).length)
  const visiveis = $derived.by(() => {
   const q = normalizar(busca)
-  return RECEITAS.filter(r => (!q || normalizar(r.nome).includes(q)) && (!soFeitas || loteAberto(producao, r.id) || finalizadosDe(producao, r.id).length))
+  return receitas.filter(r => (!q || normalizar(r.nome).includes(q)) && (!soFeitas || loteAberto(producao, r.id) || finalizadosDe(producao, r.id).length))
  })
- const mensagem = $derived(relatorio(producao, RECEITAS))
+ const mensagem = $derived(relatorio(producao, receitas))
  const quem = $derived(cozinheiroAtual(producao))
  const nuvem = $derived(tokenRecusado ? 'recusado' : enviando ? 'enviando' : pendentes.length ? 'pendente' : 'ok')
 
@@ -54,7 +58,8 @@
   sairModoApp = entrarModoApp()
   escuro = temaInicial(); aplicarTema(escuro)
   try {whats = localStorage.getItem(CHAVE_WHATS) ?? ''} catch {/* sem localStorage */}
-  const salvo = revisar(await ler<unknown>(CHAVE_ESTADO), RECEITAS, hoje())
+  receitas = converterCatalogo(await ler<unknown>(CHAVE_CATALOGO)) ?? RECEITAS
+  const salvo = revisar(await ler<unknown>(CHAVE_ESTADO), receitas, hoje())
   // O dia é sempre hoje ao abrir; lotes abertos de ontem continuam e recebem o dia ao finalizar.
   producao = podar({...salvo, data: hoje()}, hoje())
   carregado = true
@@ -63,7 +68,16 @@
   document.addEventListener('visibilitychange', aoVoltarSinal)
   relogio = setInterval(() => {if (pendentes.length) void sincronizar()}, INTERVALO_ENVIO)
   void sincronizar()
+  void atualizarCatalogo()
  })
+
+ /** Baixa as fichas vigentes e guarda no aparelho; sem sinal, segue com a última cópia. */
+ async function atualizarCatalogo() {
+  const novas = await buscarCatalogo()
+  if (!novas) return
+  receitas = novas
+  await gravar(CHAVE_CATALOGO, novas.map(r => ({...r, rendimentoKg: r.rendimento.qtd, validadeDias: r.validadeDias ?? null})))
+ }
  onDestroy(() => {
   sairModoApp?.()
   if (relogio) clearInterval(relogio)

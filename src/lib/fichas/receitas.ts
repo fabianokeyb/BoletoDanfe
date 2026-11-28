@@ -109,10 +109,10 @@ export const RECEITAS: Receita[] = [
   ficha(17, 'Maionese Defumada', [2.085, 'kg'], 5, [
     ['Alho', 200, 'g'], ['Caldo de Galinha', 55, 'g'], ['Fumaça Líquida', 300, 'g'], ['Maionese', 1.5, 'kg'], ['Pimenta Preta Moída', 30, 'g']
   ]),
-  ficha(18, 'Maionese Vegana', [500, 'g'], 5, [
+  ficha(18, 'Maionese Vegana', [0.5, 'kg'], 5, [
     ['Base Vegana', 250, 'ml'], ['Leite de Soja', 80, 'g'], ['Óleo', 500, 'ml']
   ]),
-  ficha(19, 'Maionese Verde', [670, 'g'], 3, [
+  ficha(19, 'Maionese Verde', [0.67, 'kg'], 3, [
     ['Alho', 30, 'g'], ['Caldo de Carne', 2, 'g'], ['Cebola Roxa', 25, 'g'], ['Óleo', 900, 'ml'], ['Orégano', 1, 'g'],
     ['Ovos', 3, 'un'], ['Sal', 7, 'g'], ['Salsa', 24, 'g']
   ]),
@@ -128,16 +128,16 @@ export const RECEITAS: Receita[] = [
   ficha(23, 'Sal da Carne', [1.5, 'kg'], 30, [
     ['Coentro em Pó', 250, 'g'], ['Pimenta do Reino Moída', 250, 'g'], ['Sal', 1, 'kg']
   ]),
-  ficha(24, 'Tempero do Bogwing', [843, 'g'], 10, [
+  ficha(24, 'Tempero do Bogwing', [0.843, 'kg'], 10, [
     ['Água', 300, 'ml'], ['Alho Batido', 50, 'g'], ['Caldo de Galinha', 65, 'g'], ['Cerveja', 473, 'ml']
   ]),
-  ficha(25, 'Maionese de Cerveja', [1503, 'g'], 10, [
+  ficha(25, 'Maionese de Cerveja', [1.503, 'kg'], 10, [
     ['Cerveja', 473, 'ml'], ['Caldo de Carne', 30, 'g'], ['Maionese', 1, 'kg'], ['Cebola Roxa', 1, 'un']
   ]),
-  ficha(26, 'Farofa de Bacon', [2520, 'g'], 10, [
+  ficha(26, 'Farofa de Bacon', [2.52, 'kg'], 10, [
     ['Farinha Panko', 500, 'g'], ['Caldo de Carne', 20, 'g'], ['Bacon Cubo', 1, 'kg'], ['Cebola Roxa', 1, 'un']
   ]),
-  ficha(27, 'Ketchup de Acerola', [1825, 'g'], 10, [
+  ficha(27, 'Ketchup de Acerola', [1.825, 'kg'], 10, [
     ['Polpa de Acerola', 800, 'g'], ['Tomate', 1, 'un'], ['Pasta de Alho', 100, 'g'], ['Cebola Roxa', 1, 'un'], ['Água', 100, 'ml'],
     ['Páprica Picante', 15, 'g'], ['Açúcar Mascavo', 350, 'g'], ['Vinagre de Maçã', 300, 'ml'], ['Amido de Milho', 60, 'g']
   ])

@@ -281,3 +281,22 @@ test('Envio: corpo da chamada e tratamento de erros', async () => {
   await assert.rejects(enviarLote('x', {id: 'abc'}, async () => new Response('{"id":"outro"}')), e => e.tipo === 'servidor')
   assert.equal(await verificarToken('x', async () => new Response('{"ok":true,"nome":"Cozinha"}')), 'Cozinha')
 })
+
+import {converterCatalogo} from '../src/lib/fichas/catalogo.ts'
+
+test('catálogo do servidor vira receitas com rendimento em kg e descarta o malformado', () => {
+  const r = converterCatalogo([
+    {id: 'b', numero: 2, nome: 'B', rendimentoKg: '0.670', validadeDias: null, ingredientes: [{id: 'x', nome: 'X', qtd: 30, unidade: 'g'}]},
+    {id: 'a', numero: 1, nome: 'A', rendimentoKg: 4.763, validadeDias: 7, ingredientes: [{id: 'y', nome: 'Y', qtd: 2.8, unidade: 'kg', obs: 'o'}, {id: 'z', nome: 'Z', qtd: 1, unidade: 'xícara'}]},
+    {id: 'c', numero: 3, nome: 'C', rendimentoKg: 0, ingredientes: [{id: 'x', nome: 'X', qtd: 1, unidade: 'g'}]}
+  ])
+  assert.deepEqual(r.map(x => x.id), ['a', 'b'])
+  assert.deepEqual(r[0].rendimento, {qtd: 4.763, unidade: 'kg'})
+  assert.equal(r[0].ingredientes.length, 1)
+  assert.equal(r[1].validadeDias, undefined)
+  assert.equal(converterCatalogo('x'), null)
+})
+
+test('todas as fichas embutidas têm rendimento em kg', () => {
+  for (const r of RECEITAS) assert.equal(r.rendimento.unidade, 'kg', r.nome)
+})
