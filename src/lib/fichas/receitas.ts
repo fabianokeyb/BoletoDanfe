@@ -20,6 +20,7 @@ export interface Receita {
   numero: number
   nome: string
   ingredientes: Ingrediente[]
+  /** Rendimento de 1 receita; qtd 0 = ainda não pesado (a primeira produção define). */
   rendimento: {qtd: number, unidade: Unidade}
   /** Validade do cabeçalho da ficha, em dias; ausente quando a ficha não informa. */
   validadeDias?: number
@@ -72,72 +73,79 @@ export const RECEITAS: Receita[] = [
   ficha(5, 'Cheddar Cremoso', [10.967, 'kg'], 12, [
     ['Água', 5, 'l'], ['Cheddar Fatiado', 6.081, 'kg', '3 peças'], ['Creme de Leite', 800, 'g'], ['Leite em Pó', 400, 'g']
   ]),
-  ficha(6, 'Compota de Bacon', [7.532, 'kg'], 12, [
+  ficha(6, 'Churros', [0, 'kg'], undefined, [
+    ['Farinha de Trigo', 200, 'g', 'peneirada'], ['Manteiga', 40, 'g'], ['Açúcar', 50, 'g'], ['Água', 300, 'ml', 'temperatura ambiente'], ['Ovo', 1, 'un']
+  ]),
+  ficha(7, 'Compota de Bacon', [7.532, 'kg'], 12, [
     ['Açúcar Mascavo', 651, 'g'], ['Alho Batido', 100, 'g'], ['Bacon em Cubos', 5, 'kg'], ['Chilli em Pó', 100, 'g'],
     ['Ketchup', 2, 'kg'], ['Tomate Pelati', 2.033, 'kg'], ['Vinagre Balsâmico', 1.5, 'l']
   ]),
-  ficha(7, 'Creme de Gorgonzola', [3, 'kg'], undefined, [
+  ficha(8, 'Creme de Gorgonzola', [3, 'kg'], undefined, [
     ['Água', 1, 'l'], ['Amido de Milho', 100, 'g'], ['Creme de Leite', 400, 'g'], ['Gorgonzola', 1.5, 'kg'], ['Leite em Pó', 200, 'g']
   ]),
-  ficha(8, 'Ketchup Picante', [2, 'kg'], 12, [
+  ficha(9, 'Geleia de Pimenta', [0, 'kg'], undefined, [
+    ['Açúcar', 400, 'g'], ['Água', 720, 'ml'], ['Alho Batido', 100, 'g'], ['Vinagre de Álcool', 90, 'ml'], ['Extrato de Tomate', 50, 'g'],
+    ['Amido de Milho', 30, 'g'], ['Sal', 15, 'g'], ['Pimenta Dedo-de-Moça', 3, 'un', 'quantidade rasurada no original']
+  ]),
+  ficha(10, 'Ketchup Picante', [2, 'kg'], 12, [
     ['Chilli em Pó', 80, 'g'], ['Ketchup', 2, 'kg'], ['Páprica Picante', 80, 'g']
   ]),
-  ficha(9, 'Ketstarda', [2.453, 'kg'], 5, [
+  ficha(11, 'Ketstarda', [2.453, 'kg'], 5, [
     ['Açúcar Cristal', 100, 'g'], ['Ketchup', 1, 'kg'], ['Mostarda', 1.5, 'kg'], ['Páprica Defumada', 100, 'g'], ['Páprica Picante', 100, 'g']
   ]),
-  ficha(10, 'Maionese de Alho com Lemon Pepper', [2.615, 'kg'], 3, [
+  ficha(12, 'Maionese de Alho com Lemon Pepper', [2.615, 'kg'], 3, [
     ['Água', 500, 'ml'], ['Leite em Pó', 100, 'g'], ['Lemon Pepper', 100, 'g'], ['Óleo', 1.8, 'l']
   ]),
-  ficha(11, 'Maionese de Cebola Roxa', [2.49, 'kg'], 3, [
+  ficha(13, 'Maionese de Cebola Roxa', [2.49, 'kg'], 3, [
     ['Cebola Roxa', 860, 'g', '± 3 unidades'], ['Maionese', 1.58, 'kg'], ['Pimenta Verde em Conserva', 50, 'g']
   ]),
-  ficha(12, 'Maionese Clássica', [2.69, 'kg'], 5, [
+  ficha(14, 'Maionese Clássica', [2.69, 'kg'], 5, [
     ['Alho', 100, 'g'], ['Cream Cheese', 400, 'g'], ['Ketchup', 400, 'g'], ['Mix de Legumes em Conserva', 600, 'g'], ['Maionese', 1.2, 'kg']
   ]),
-  ficha(13, 'Maionese de Bacon', [4.296, 'kg'], 5, [
+  ficha(15, 'Maionese de Bacon', [4.296, 'kg'], 5, [
     ['Bacon Cubo ou Fatiado', 1, 'kg'], ['Cebola Roxa', 880, 'g', 'aprox. 3 unidades'], ['Maionese', 3, 'kg']
   ]),
-  ficha(14, 'Maionese de Cebolinha', [3.78, 'kg'], 5, [
+  ficha(16, 'Maionese de Cebolinha', [3.78, 'kg'], 5, [
     ['Alcaparras (sem água)', 150, 'g'], ['Maionese', 3, 'kg'], ['Pasta de Alho', 80, 'g'], ['Salsa e Cebolinha', 647, 'g', '2 salsas / 3 cebolinhas']
   ]),
-  ficha(15, 'Maionese de Leite', [1.314, 'kg'], 5, [
+  ficha(17, 'Maionese de Leite', [1.314, 'kg'], 5, [
     ['Água', 400, 'ml'], ['Leite em Pó', 100, 'g'], ['Óleo', 900, 'ml']
   ]),
-  ficha(16, 'Maionese de Tomate Seco', [2, 'kg'], 5, [
+  ficha(18, 'Maionese de Tomate Seco', [2, 'kg'], 5, [
     ['Caldo de Galinha', 50, 'g'], ['Maionese', 1.5, 'kg'], ['Tomate Seco', 200, 'g']
   ]),
-  ficha(17, 'Maionese Defumada', [2.085, 'kg'], 5, [
+  ficha(19, 'Maionese Defumada', [2.085, 'kg'], 5, [
     ['Alho', 200, 'g'], ['Caldo de Galinha', 55, 'g'], ['Fumaça Líquida', 300, 'g'], ['Maionese', 1.5, 'kg'], ['Pimenta Preta Moída', 30, 'g']
   ]),
-  ficha(18, 'Maionese Vegana', [0.5, 'kg'], 5, [
+  ficha(20, 'Maionese Vegana', [0.5, 'kg'], 5, [
     ['Base Vegana', 250, 'ml'], ['Leite de Soja', 80, 'g'], ['Óleo', 500, 'ml']
   ]),
-  ficha(19, 'Maionese Verde', [0.67, 'kg'], 3, [
+  ficha(21, 'Maionese Verde', [0.67, 'kg'], 3, [
     ['Alho', 30, 'g'], ['Caldo de Carne', 2, 'g'], ['Cebola Roxa', 25, 'g'], ['Óleo', 900, 'ml'], ['Orégano', 1, 'g'],
     ['Ovos', 3, 'un'], ['Sal', 7, 'g'], ['Salsa', 24, 'g']
   ]),
-  ficha(20, 'Mostarda e Mel', [1.523, 'kg'], 12, [
+  ficha(22, 'Mostarda e Mel', [1.523, 'kg'], 12, [
     ['Mel', 530, 'g'], ['Mostarda Amarela', 1, 'kg']
   ]),
-  ficha(21, 'Picles de Pepino em Conserva', [4.828, 'kg'], 30, [
+  ficha(23, 'Picles de Pepino em Conserva', [4.828, 'kg'], 30, [
     ['Água', 600, 'ml'], ['Coentro em Grãos', 100, 'g'], ['Pepino Japonês', 2.918, 'kg'], ['Sal', 280, 'g', '6 colheres rasas'], ['Vinagre de Maçã', 1.5, 'l']
   ]),
-  ficha(22, 'Sal da Batata', [1.5, 'kg'], 30, [
+  ficha(24, 'Sal da Batata', [1.5, 'kg'], 30, [
     ['Páprica Defumada', 250, 'g'], ['Páprica Picante', 250, 'g'], ['Sal', 1, 'kg']
   ]),
-  ficha(23, 'Sal da Carne', [1.5, 'kg'], 30, [
+  ficha(25, 'Sal da Carne', [1.5, 'kg'], 30, [
     ['Coentro em Pó', 250, 'g'], ['Pimenta do Reino Moída', 250, 'g'], ['Sal', 1, 'kg']
   ]),
-  ficha(24, 'Tempero do Bogwing', [0.843, 'kg'], 10, [
+  ficha(26, 'Tempero do Bogwing', [0.843, 'kg'], 10, [
     ['Água', 300, 'ml'], ['Alho Batido', 50, 'g'], ['Caldo de Galinha', 65, 'g'], ['Cerveja', 473, 'ml']
   ]),
-  ficha(25, 'Maionese de Cerveja', [1.503, 'kg'], 10, [
+  ficha(27, 'Maionese de Cerveja', [1.503, 'kg'], 10, [
     ['Cerveja', 473, 'ml'], ['Caldo de Carne', 30, 'g'], ['Maionese', 1, 'kg'], ['Cebola Roxa', 1, 'un']
   ]),
-  ficha(26, 'Farofa de Bacon', [2.52, 'kg'], 10, [
+  ficha(28, 'Farofa de Bacon', [2.52, 'kg'], 10, [
     ['Farinha Panko', 500, 'g'], ['Caldo de Carne', 20, 'g'], ['Bacon Cubo', 1, 'kg'], ['Cebola Roxa', 1, 'un']
   ]),
-  ficha(27, 'Ketchup de Acerola', [1.825, 'kg'], 10, [
+  ficha(29, 'Ketchup de Acerola', [1.825, 'kg'], 10, [
     ['Polpa de Acerola', 800, 'g'], ['Tomate', 1, 'un'], ['Pasta de Alho', 100, 'g'], ['Cebola Roxa', 1, 'un'], ['Água', 100, 'ml'],
     ['Páprica Picante', 15, 'g'], ['Açúcar Mascavo', 350, 'g'], ['Vinagre de Maçã', 300, 'ml'], ['Amido de Milho', 60, 'g']
   ])

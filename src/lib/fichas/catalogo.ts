@@ -14,7 +14,7 @@ export interface FichaServidor {
   id: string
   numero: number
   nome: string
-  rendimentoKg: number
+  rendimentoKg: number | null
   validadeDias: number | null
   ingredientes: {id: string, nome: string, qtd: number, unidade: string, obs?: string}[]
 }
@@ -30,8 +30,8 @@ export function converterCatalogo(dados: unknown): Receita[] | null {
   for (const f of dados as FichaServidor[]) {
     const ingredientes = Array.isArray(f?.ingredientes) ? f.ingredientes.filter(i =>
       typeof i?.id === 'string' && typeof i.nome === 'string' && Number(i.qtd) > 0 && UNIDADES.includes(i.unidade as Unidade)) : []
-    const rend = Number(f?.rendimentoKg)
-    if (typeof f?.id !== 'string' || typeof f.nome !== 'string' || !ingredientes.length || !(rend > 0)) continue
+    const rend = f?.rendimentoKg == null ? 0 : Number(f.rendimentoKg)
+    if (typeof f?.id !== 'string' || typeof f.nome !== 'string' || !ingredientes.length || rend < 0 || Number.isNaN(rend)) continue
     receitas.push({
       id: f.id, numero: Number(f.numero), nome: f.nome,
       ingredientes: ingredientes.map(i => ({id: i.id, nome: i.nome, qtd: Number(i.qtd), unidade: i.unidade as Unidade, ...(i.obs ? {obs: i.obs} : {})})),

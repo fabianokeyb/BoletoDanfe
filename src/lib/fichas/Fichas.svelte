@@ -299,7 +299,7 @@
     <span class="nome">{r.nome}</span>
     {#if lote}<span class="selo s-andamento">em andamento<small>{lote.cozinheiro}</small></span>
     {:else if feitos.length}<span class="selo s-feita">✓ finalizada{#if feitos.length > 1}{` ×${feitos.length}`}{/if}</span>
-    {:else}<span class="rend-ficha">{formatar(r.rendimento.qtd, r.rendimento.unidade)}</span>{/if}
+    {:else}<span class="rend-ficha">{r.rendimento.qtd ? formatar(r.rendimento.qtd, r.rendimento.unidade) : 'a pesar'}</span>{/if}
    </button>
    {#if aberta === r.id}
     <div class="corpo">
@@ -308,7 +308,7 @@
       <div class="feito">
        <span class="ft-info">
         <b>✓ {feitos.length > 1 ? `Lote ${k + 1} · ` : ''}{hora(f.finalizadoEm ?? 0)} · {f.cozinheiro}</b>
-        <small>{formatar(f.rendimento ?? 0, r.rendimento.unidade)}{#if f.rendimento !== rf}{` (${pct(((f.rendimento ?? 0) - rf) / rf)})`}{/if}{` · ${fatorTexto(fatorDe(r, f))} · ${situacao(r, f) === 'alterada' ? 'alterada' : 'na proporção'} · ${situacaoNuvem(f)}`}</small>
+        <small>{formatar(f.rendimento ?? 0, r.rendimento.unidade)}{#if rf && f.rendimento !== rf}{` (${pct(((f.rendimento ?? 0) - rf) / rf)})`}{/if}{` · ${fatorTexto(fatorDe(r, f))} · ${situacao(r, f) === 'alterada' ? 'alterada' : 'na proporção'} · ${situacaoNuvem(f)}`}</small>
        </span>
        <button class="link" onclick={() => corrigir(f)}>corrigir</button>
       </div>
@@ -349,10 +349,10 @@
         <span class="ing"><span class="t">Quanto fez</span><small>calculado pelos ingredientes</small></span>
         <b class="calc-v">{fatorTexto(fator)}</b>
        </div>
-       <label class="linha rend" class:falta={!!lote && !lote.rendimento} class:mudou={!!lote?.rendimento && lote.rendimento !== rendRef}>
+       <label class="linha rend" class:falta={!!lote && !lote.rendimento} class:mudou={!!rendRef && !!lote?.rendimento && lote.rendimento !== rendRef}>
         <span class="ing">
          <span class="t">Rendimento pesado *</span>
-         <small>{fator === 1 ? 'ficha' : 'esperado'} {formatar(rendRef, r.rendimento.unidade)}{#if lote?.rendimento && lote.rendimento !== rendRef}{' · '}<b class="var">{pct((lote.rendimento - rendRef) / rendRef)}</b>{:else if lote && !lote.rendimento}{' · '}<b class="var">pese e digite</b>{/if}</small>
+         <small>{#if rendRef}{fator === 1 ? 'ficha' : 'esperado'} {formatar(rendRef, r.rendimento.unidade)}{:else}ficha sem rendimento: esta pesagem define{/if}{#if rendRef && lote?.rendimento && lote.rendimento !== rendRef}{' · '}<b class="var">{pct((lote.rendimento - rendRef) / rendRef)}</b>{:else if lote && !lote.rendimento}{' · '}<b class="var">pese e digite</b>{/if}</small>
         </span>
         <span class="campo">
          <input id="rend-{r.id}" inputmode={modoTeclado(r.rendimento.unidade)} enterkeyhint="done" autocomplete="off" placeholder="peso" aria-label="Rendimento pesado em {rotulo(r.rendimento.unidade)}"

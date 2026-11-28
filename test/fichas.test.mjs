@@ -23,12 +23,12 @@ const receita = nome => RT.find(r => r.nome === nome)
 /** Gerador de ids previsível. */
 const ids = () => {let n = 0; return () => `00000000-0000-4000-8000-${String(++n).padStart(12, '0')}`}
 
-test('Cadastro: 27 fichas, ids únicos, quantidades positivas', () => {
-  assert.equal(RECEITAS.length, 27)
-  assert.equal(new Set(RECEITAS.map(r => r.id)).size, 27)
-  assert.deepEqual(RECEITAS.map(r => r.numero), Array.from({length: 27}, (_, i) => i + 1))
+test('Cadastro: 29 fichas, ids únicos, quantidades positivas', () => {
+  assert.equal(RECEITAS.length, 29)
+  assert.equal(new Set(RECEITAS.map(r => r.id)).size, 29)
+  assert.deepEqual(RECEITAS.map(r => r.numero), Array.from({length: 29}, (_, i) => i + 1))
   for (const r of RECEITAS) {
-    assert.ok(r.rendimento.qtd > 0, r.nome)
+    assert.ok(r.rendimento.qtd > 0 || ['churros', 'geleia-de-pimenta'].includes(r.id), r.nome)
     assert.equal(new Set(r.ingredientes.map(i => i.id)).size, r.ingredientes.length, r.nome)
     for (const i of r.ingredientes) assert.ok(i.qtd > 0, `${r.nome} · ${i.nome}`)
   }
@@ -290,7 +290,7 @@ test('catálogo do servidor vira receitas com rendimento em kg e descarta o malf
     {id: 'a', numero: 1, nome: 'A', rendimentoKg: 4.763, validadeDias: 7, ingredientes: [{id: 'y', nome: 'Y', qtd: 2.8, unidade: 'kg', obs: 'o'}, {id: 'z', nome: 'Z', qtd: 1, unidade: 'xícara'}]},
     {id: 'c', numero: 3, nome: 'C', rendimentoKg: 0, ingredientes: [{id: 'x', nome: 'X', qtd: 1, unidade: 'g'}]}
   ])
-  assert.deepEqual(r.map(x => x.id), ['a', 'b'])
+  assert.deepEqual(r.map(x => x.id), ['a', 'b', 'c'])
   assert.deepEqual(r[0].rendimento, {qtd: 4.763, unidade: 'kg'})
   assert.equal(r[0].ingredientes.length, 1)
   assert.equal(r[1].validadeDias, undefined)
@@ -299,4 +299,11 @@ test('catálogo do servidor vira receitas com rendimento em kg e descarta o malf
 
 test('todas as fichas embutidas têm rendimento em kg', () => {
   for (const r of RECEITAS) assert.equal(r.rendimento.unidade, 'kg', r.nome)
+})
+
+test('ficha sem rendimento: relatório pede a primeira pesagem em vez de comparar', () => {
+  const r = RECEITAS.find(x => x.id === 'geleia-de-pimenta')
+  assert.equal(r.rendimento.qtd, 0)
+  assert.deepEqual(RECEITAS.map(x => x.numero), RECEITAS.map((_, i) => i + 1))
+  assert.deepEqual(converterCatalogo([{id: 'g', numero: 1, nome: 'G', rendimentoKg: null, ingredientes: [{id: 'a', nome: 'A', qtd: 1, unidade: 'g'}]}])[0].rendimento, {qtd: 0, unidade: 'kg'})
 })

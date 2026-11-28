@@ -564,7 +564,9 @@ export function relatorio(p: Producao, receitas: Receita[]): string {
       for (const d of difs) linhas.push(`• ${d.ingrediente.nome}: *${formatar(d.usado, d.ingrediente.unidade)}* (${ref} ${formatar(d.esperado, d.ingrediente.unidade)} · ${pct(d.variacao)})`)
       if (difs.length < r.ingredientes.length) linhas.push('• Demais ingredientes: na proporção da ficha')
     }
-    linhas.push(`Rendimento: *${formatar(rend, u)}* (${ref} ${formatar(esperado, u)}${rend === esperado ? '' : ` · ${pct(esperado ? (rend - esperado) / esperado : 0)}`})`)
+    linhas.push(esperado
+      ? `Rendimento: *${formatar(rend, u)}* (${ref} ${formatar(esperado, u)}${rend === esperado ? '' : ` · ${pct((rend - esperado) / esperado)}`})`
+      : `Rendimento: *${formatar(rend, u)}* (primeira pesagem: a ficha ainda não tem rendimento)`)
     if (quem.length > 1) linhas.push(`_por ${l.cozinheiro}_`)
     if (l.obs) linhas.push(`_Obs.: ${l.obs}_`)
   }
