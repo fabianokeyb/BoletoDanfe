@@ -6,6 +6,7 @@
 import {SUPABASE_URL, SUPABASE_CHAVE_PUBLICA} from '../compras/sincronizar.ts'
 import type {Unidade} from '../compras/unidades.ts'
 import type {Receita} from './receitas.ts'
+import {TOKEN_COZINHA} from './enviar.ts'
 
 const UNIDADES: readonly Unidade[] = ['g', 'kg', 'ml', 'l', 'un']
 
@@ -43,7 +44,7 @@ export function converterCatalogo(dados: unknown): Receita[] | null {
 }
 
 /**
- * Busca as fichas vigentes no servidor.
+ * Busca as fichas vigentes no servidor (exige o código da cozinha).
  * @param fetchFn injeção para teste
  * @returns receitas, ou null sem sinal ou com resposta inválida
  */
@@ -52,7 +53,7 @@ export async function buscarCatalogo(fetchFn: typeof fetch = fetch): Promise<Rec
     const r = await fetchFn(`${SUPABASE_URL}/rest/v1/rpc/fichas_catalogo`, {
       method: 'POST', cache: 'no-store',
       headers: {apikey: SUPABASE_CHAVE_PUBLICA, 'Content-Type': 'application/json', Accept: 'application/json'},
-      body: '{}'
+      body: JSON.stringify({p_token: TOKEN_COZINHA})
     })
     return r.ok ? converterCatalogo(await r.json()) : null
   } catch {
