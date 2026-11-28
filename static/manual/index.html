@@ -107,6 +107,18 @@ html{scroll-padding-top:calc(var(--top,150px) + 64px)}
 .aviso{margin-top:10px;font-size:14px;font-weight:600;min-height:1em}
 .aviso.erro{color:#a1261b}.aviso.ok{color:var(--ok)}
 [hidden]{display:none!important}
+.ing li{grid-template-columns:minmax(0,1.4fr) minmax(48px,1fr) max-content;row-gap:2px}
+.ing .q{white-space:nowrap}
+.ing li>.pes{grid-column:1/-1;justify-self:end;text-align:right;font-size:12px;font-weight:700;color:var(--al);white-space:normal;overflow-wrap:anywhere;max-width:100%}
+.ing li>.pes .m{white-space:nowrap}
+.fotos figcaption{display:flex;flex-direction:column;gap:2px;min-height:0}
+.fotos figcaption span{overflow-wrap:anywhere;padding-right:0}
+.fotos .vis{position:static;width:70%;max-width:220px;margin:6px 0 2px;align-self:flex-start}
+.fotos figcaption b{font-size:22px;line-height:1.15;overflow-wrap:anywhere}
+.chip{min-width:0}.chip b{display:block;overflow-wrap:anywhere}
+.rec>header h2{min-width:0;overflow-wrap:anywhere}
+.selo{flex:none;max-width:45%}
+.nota,.fonte,.pend li{overflow-wrap:anywhere}
 </style></head><body>
 <header class="topo"><div class="linha1"><h1>Fichas técnicas</h1><nav class="abas" role="tablist"><button role="tab" data-aba="manual" aria-selected="true">Manual</button><button role="tab" data-aba="editar" aria-selected="false">Editar</button></nav></div>
 <p>The Hutt Burger · 27 receitas · revisão de 28/11/2026</p>
@@ -298,7 +310,7 @@ function desenhar() {
     a.querySelector('.ing').innerHTML = f.ingredientes.map(i => {
       const g = gramas(i), p = pesado(f.id, i.nome)
       const bar = g ? `<span class="bar"><i style="--w:${Math.max(2, g / mx * 100).toFixed(0)}%"></i></span>` : '<span class="bar un">unidade</span>'
-      return `<li><span class="in">${esc(i.nome)}${i.obs ? `<small>${esc(i.obs)}</small>` : ''}</span>${bar}<span class="q">${esc(fmt(i.qtd, i.unidade))}${p ? `<small class="pes">pesado ${p}</small>` : ''}</span></li>`
+      return `<li><span class="in">${esc(i.nome)}${i.obs ? `<small>${esc(i.obs)}</small>` : ''}</span>${bar}<span class="q">${esc(fmt(i.qtd, i.unidade))}</span>${p ? `<small class="pes">pesado ${p}</small>` : ''}</li>`
     }).join('')
     a.querySelector('.c-rend').textContent = kg3(f.rendimentoKg)
     a.querySelector('.c-val').textContent = f.validadeDias ? f.validadeDias + ' dias' : 'não informada'
